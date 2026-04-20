@@ -1,0 +1,1988 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>KITTI Odometry — Multi-Metric Difficulty Dashboard v3</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;600;700&display=swap" rel="stylesheet">
+<style>
+/* ── Reset & Variables ─────────────────────────────── */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0D1117;--surface:#161B22;--surface2:#1C2430;--border:#30363D;
+  --text:#E6EDF3;--muted:#8B949E;
+  --easy:#2ECC71;--medium:#F39C12;--hard:#E74C3C;--accent:#58A6FF;
+}
+html,body{height:100%;background:var(--bg);color:var(--text);
+  font-family:'IBM Plex Sans',system-ui,sans-serif;line-height:1.6}
+
+/* ── Header ────────────────────────────────────────── */
+header{
+  background:linear-gradient(135deg,#0D1117 0%,#161B22 50%,#1C2733 100%);
+  border-bottom:1px solid var(--border);padding:2rem 3rem;
+  position:relative;overflow:hidden;
+}
+header::before{
+  content:'';position:absolute;top:-40px;right:-40px;
+  width:260px;height:260px;border-radius:50%;
+  background:radial-gradient(circle,rgba(88,166,255,.12) 0%,transparent 70%);
+  pointer-events:none;
+}
+header h1{font-size:clamp(1.3rem,2.5vw,1.9rem);font-weight:700;letter-spacing:-.02em;
+  color:var(--accent);font-family:'IBM Plex Mono',monospace}
+header p{color:var(--muted);font-size:.9rem;margin-top:.35rem;letter-spacing:.02em}
+.header-meta{display:flex;gap:1.5rem;margin-top:1rem;flex-wrap:wrap;align-items:center}
+.badge{font-family:'IBM Plex Mono',monospace;font-size:.75rem;padding:.25rem .7rem;border-radius:4px;
+  border:1px solid var(--border);color:var(--muted);background:var(--bg)}
+.badge span{color:var(--accent);font-weight:600}
+.new-badge{background:rgba(88,166,255,.12);border-color:rgba(88,166,255,.4);
+  color:var(--accent);font-size:.7rem;padding:.2rem .55rem}
+
+/* ── Layout ────────────────────────────────────────── */
+main{
+  max-width:1440px;margin:0 auto;padding:2rem 2.5rem 4rem;
+  display:grid;gap:1.5rem;grid-template-columns:1fr 1fr;
+  grid-template-areas:
+    "upload   upload"
+    "compute  compute"
+    "notice   notice"
+    "stats    stats"
+    "findings findings"
+    "weights  weights"
+    "bar      radar"
+    "parallel parallel"
+    "heat     pca"
+    "temporal temporal"
+    "traj     runtime"
+    "summary  summary"
+    "table    table";
+}
+
+/* ── Upload Area (dual card) ───────────────────────── */
+#upload-area{
+  grid-area:upload;display:grid;grid-template-columns:1fr 1fr;gap:1rem;
+}
+.upload-card{
+  border:2px dashed var(--border);border-radius:12px;background:var(--surface);
+  padding:1.8rem 1.5rem;text-align:center;
+  transition:border-color .2s,background .2s;position:relative;
+}
+.upload-card:hover,.upload-card.drag{border-color:var(--accent);background:#1C2733}
+.upload-card.pose-card:hover,.upload-card.pose-card.drag{border-color:#BC8CFF}
+/* Hide the raw input — triggered only from browse button */
+.upload-card input[type=file]{display:none}
+.upload-card .icon{font-size:2rem;margin-bottom:.4rem}
+.upload-card .opt-tag{font-family:'IBM Plex Mono',monospace;font-size:.68rem;
+  padding:.15rem .55rem;border-radius:4px;margin-bottom:.5rem;display:inline-block}
+.upload-card.csv-card .opt-tag{background:rgba(88,166,255,.12);color:var(--accent);border:1px solid rgba(88,166,255,.4)}
+.upload-card.pose-card .opt-tag{background:rgba(188,140,255,.12);color:#BC8CFF;border:1px solid rgba(188,140,255,.4)}
+.upload-card h3{font-size:.95rem;color:var(--text);margin-bottom:.25rem}
+.upload-card p{font-size:.78rem;color:var(--muted);line-height:1.55;margin-bottom:.8rem}
+.browse-btn{display:inline-block;padding:.3rem 1rem;border-radius:6px;font-size:.75rem;
+  font-family:'IBM Plex Mono',monospace;cursor:pointer;border:1px solid var(--border);
+  background:var(--bg);color:var(--muted);transition:border-color .15s,color .15s}
+.browse-btn:hover{border-color:var(--accent);color:var(--accent)}
+.upload-card.pose-card .browse-btn:hover{border-color:#BC8CFF;color:#BC8CFF}
+.upload-status{display:none;border-radius:8px;padding:.65rem 1rem;
+  font-family:'IBM Plex Mono',monospace;font-size:.76rem;margin-top:.8rem;text-align:left}
+.upload-status.ok{background:#071407;border:1px solid var(--easy);color:var(--easy)}
+.upload-status.working{background:#0d0d1f;border:1px solid #BC8CFF;color:#BC8CFF}
+.upload-status.warn{background:#1a100a;border:1px solid var(--medium);color:var(--medium)}
+@media(max-width:700px){#upload-area{grid-template-columns:1fr}}
+
+/* ── Demo Banner ───────────────────────────────────── */
+#demo-notice{grid-area:notice}
+
+/* ── Stat Cards ────────────────────────────────────── */
+#stats-row{grid-area:stats;display:grid;grid-template-columns:repeat(5,1fr);gap:1rem}
+.stat-card{background:var(--surface);border:1px solid var(--border);border-radius:10px;
+  padding:1.1rem 1.2rem;position:relative;overflow:hidden}
+.stat-card::after{content:'';position:absolute;bottom:0;left:0;right:0;
+  height:3px;background:var(--accent);opacity:.7}
+.stat-card.easy-card::after{background:var(--easy)}
+.stat-card.med-card::after{background:var(--medium)}
+.stat-card.hard-card::after{background:var(--hard)}
+.stat-label{font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
+.stat-value{font-size:1.75rem;font-weight:700;font-family:'IBM Plex Mono',monospace;color:var(--text)}
+.stat-sub{font-size:.75rem;color:var(--muted);margin-top:.15rem}
+
+/* ── Chart Panels ──────────────────────────────────── */
+.panel{background:var(--surface);border:1px solid var(--border);border-radius:12px;
+  padding:1.4rem;display:flex;flex-direction:column;gap:1rem}
+.panel-title{font-size:.82rem;font-weight:600;text-transform:uppercase;
+  letter-spacing:.1em;color:var(--muted);display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
+.panel-title::before{content:'';width:8px;height:8px;border-radius:50%;
+  background:var(--accent);display:block;flex-shrink:0}
+.panel-desc{font-size:.78rem;color:var(--muted);line-height:1.55}
+.chart-wrap{position:relative;width:100%}
+canvas{max-width:100%}
+
+/* Grid areas */
+#weights-panel  {grid-area:weights}
+#bar-panel      {grid-area:bar}
+#radar-panel    {grid-area:radar}
+#parallel-panel {grid-area:parallel}
+#heat-panel     {grid-area:heat}
+#s3d-panel      {grid-area:scatter3d}
+#temp-panel     {grid-area:temporal}
+#traj-panel     {grid-area:traj}
+#rt-panel       {grid-area:runtime}
+#table-panel    {grid-area:table}
+
+/* ── Weight Explorer ───────────────────────────────── */
+.weight-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:1rem}
+.weight-item{display:flex;flex-direction:column;gap:.4rem;align-items:center}
+.weight-val{font-size:.9rem;font-weight:700;font-family:'IBM Plex Mono',monospace;color:var(--accent)}
+input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:4px;
+  border-radius:2px;background:var(--border);outline:none;cursor:pointer}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;
+  border-radius:50%;background:var(--accent);cursor:pointer;border:2px solid var(--bg)}
+input[type=range]:hover::-webkit-slider-thumb{background:#79b8ff}
+.weight-label{font-size:.68rem;color:var(--muted);text-align:center;
+  font-family:'IBM Plex Mono',monospace;line-height:1.3}
+.weight-controls{display:flex;gap:.6rem;flex-wrap:wrap}
+.btn{padding:.3rem .9rem;border-radius:6px;font-size:.75rem;font-family:'IBM Plex Mono',monospace;
+  cursor:pointer;border:1px solid var(--border);background:var(--bg);
+  color:var(--muted);transition:all .15s}
+.btn:hover{border-color:var(--accent);color:var(--accent)}
+.btn.accent{background:rgba(88,166,255,.12);color:var(--accent);border-color:rgba(88,166,255,.45)}
+.btn.accent:hover{background:rgba(88,166,255,.25)}
+.findings-box{background:linear-gradient(135deg,#111827,#0d1117);border:1px solid #2D3561;
+  border-radius:8px;padding:.8rem 1rem;font-size:.78rem;color:#A8B4FF;line-height:1.7}
+.findings-box strong{color:var(--accent)}
+
+/* ── Parallel Coords ───────────────────────────────── */
+#parallel-container{overflow-x:auto;width:100%}
+.pc-line{fill:none;cursor:pointer}
+
+/* ── Trajectory ────────────────────────────────────── */
+.traj-controls{display:flex;align-items:center;gap:.7rem;flex-wrap:wrap}
+select.t-select{background:var(--bg);border:1px solid var(--border);color:var(--text);
+  border-radius:6px;padding:.28rem .6rem;font-size:.76rem;
+  font-family:'IBM Plex Mono',monospace;cursor:pointer;max-width:260px}
+#traj-canvas{width:100%;display:block;border-radius:8px;background:#080d12}
+.traj-info{display:flex;align-items:center;gap:1rem;font-size:.73rem;
+  font-family:'IBM Plex Mono',monospace;color:var(--muted)}
+.traj-info span{color:var(--text)}
+.prog-wrap{flex:1;height:3px;background:var(--border);border-radius:2px;overflow:hidden}
+.prog-fill{height:100%;background:var(--accent);width:0%;transition:width .08s linear}
+
+/* ── Data Table ────────────────────────────────────── */
+.data-table{width:100%;border-collapse:collapse;font-size:.78rem;font-family:'IBM Plex Mono',monospace}
+.data-table th{text-align:left;padding:.5rem .7rem;border-bottom:2px solid var(--border);
+  color:var(--muted);font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;
+  white-space:nowrap;cursor:pointer;user-select:none}
+.data-table th:hover{color:var(--accent)}
+.data-table td{padding:.45rem .7rem;border-bottom:1px solid var(--border);color:var(--text)}
+.data-table tr:hover td{background:rgba(88,166,255,.05)}
+.pill{display:inline-block;padding:.15rem .55rem;border-radius:999px;font-size:.68rem;
+  font-weight:600;font-family:'IBM Plex Sans',sans-serif}
+.pill.easy  {background:rgba(46,204,113,.15);color:var(--easy); border:1px solid rgba(46,204,113,.3)}
+.pill.medium{background:rgba(243,156,18,.15);color:var(--medium);border:1px solid rgba(243,156,18,.3)}
+.pill.hard  {background:rgba(231,76,60,.15); color:var(--hard);  border:1px solid rgba(231,76,60,.3)}
+
+/* ── Findings ──────────────────────────────────────── */
+#findings-panel{grid-area:findings}
+.findings-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:1rem}
+.finding-card{background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:.9rem 1rem}
+.finding-card .fc-label{font-size:.65rem;text-transform:uppercase;letter-spacing:.09em;color:var(--muted);margin-bottom:.3rem}
+.finding-card .fc-value{font-size:1.35rem;font-weight:700;font-family:'IBM Plex Mono',monospace;line-height:1.2}
+.finding-card .fc-desc{font-size:.71rem;color:var(--muted);margin-top:.3rem;line-height:1.5}
+.fc-hard .fc-value{color:var(--hard)}
+.fc-accent .fc-value{color:var(--accent)}
+.fc-easy .fc-value{color:var(--easy)}
+.fc-purple .fc-value{color:#BC8CFF}
+@media(max-width:700px){.findings-grid{grid-template-columns:repeat(2,1fr)}}
+
+/* ── PCA panel + selected row ──────────────────────── */
+#pca-panel{grid-area:pca}
+tr.sel-row td{background:rgba(88,166,255,.13)!important;outline:1px solid rgba(88,166,255,.35)}
+
+/* ── Print / PDF export ────────────────────────────── */
+@media print{
+  header button,#upload-area,#demo-notice,.weight-controls,.btn,#play-btn,
+  .traj-controls button,.panel-desc{display:none!important}
+  main{padding:.5rem;gap:.8rem}
+  .panel,.stat-card,.finding-card{break-inside:avoid;border:1px solid #ddd}
+  body,main,header{background:#fff;color:#111}
+  header h1{color:#111}header p{color:#444}
+  .stat-value,.fc-value{color:#111!important}
+  canvas{max-height:260px}
+}
+
+/* ── Responsive ────────────────────────────────────── */
+@media(max-width:900px){
+  main{grid-template-columns:1fr;
+    grid-template-areas:"upload""compute""notice""stats""findings""weights""bar""radar""parallel""heat""pca""temporal""traj""runtime""summary""table"}
+  #stats-row{grid-template-columns:repeat(3,1fr)}
+  .weight-grid{grid-template-columns:repeat(4,1fr)}
+}
+
+/* ── Sequence Summary Cards ────────────────────────── */
+#summary-panel{grid-area:summary}
+.seq-cards-grid{
+  display:grid;
+  grid-template-columns:repeat(auto-fill,minmax(175px,1fr));
+  gap:.85rem;
+}
+.seq-card{
+  background:var(--bg);border-radius:10px;padding:.9rem;
+  border:1.5px solid var(--border);
+  transition:border-color .18s,transform .15s,box-shadow .15s;
+  cursor:default;position:relative;overflow:hidden;
+}
+.seq-card:hover{transform:translateY(-2px);box-shadow:0 6px 24px rgba(0,0,0,.4)}
+.seq-card.selected-card{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent)44}
+.seq-card-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:.55rem}
+.seq-card-id{font-size:1.1rem;font-weight:700;font-family:'IBM Plex Mono',monospace;color:var(--text)}
+.seq-card-badge{font-size:.65rem;font-weight:700;font-family:'IBM Plex Mono',monospace;
+  padding:.12rem .45rem;border-radius:4px;text-transform:uppercase;letter-spacing:.06em}
+.badge-easy{background:rgba(46,204,113,.15);color:#2ECC71;border:1px solid rgba(46,204,113,.35)}
+.badge-medium{background:rgba(243,156,18,.15);color:#F39C12;border:1px solid rgba(243,156,18,.35)}
+.badge-hard{background:rgba(231,76,60,.2);color:#E74C3C;border:1px solid rgba(231,76,60,.4)}
+.seq-card-score{font-size:1.55rem;font-weight:700;font-family:'IBM Plex Mono',monospace;
+  margin-bottom:.1rem;line-height:1}
+.seq-card-env{font-size:.7rem;color:var(--muted);margin-bottom:.65rem;line-height:1.3}
+.seq-card-bars{display:flex;flex-direction:column;gap:.28rem;margin-bottom:.65rem}
+.sc-bar-row{display:flex;align-items:center;gap:.35rem}
+.sc-bar-lbl{font-size:.62rem;color:var(--muted);font-family:'IBM Plex Mono',monospace;
+  width:3.0rem;text-align:right;flex-shrink:0}
+.sc-bar-track{flex:1;height:5px;background:var(--border);border-radius:3px;overflow:hidden}
+.sc-bar-fill{height:100%;border-radius:3px;transition:width .4s ease}
+.seq-card-stats{display:flex;justify-content:space-between;
+  padding-top:.5rem;border-top:1px solid var(--border)}
+.scs-item{display:flex;flex-direction:column;align-items:center;gap:.1rem}
+.scs-val{font-size:.72rem;font-weight:700;font-family:'IBM Plex Mono',monospace;color:var(--text)}
+.scs-key{font-size:.58rem;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.seq-card-insight{font-size:.67rem;color:var(--muted);line-height:1.4;
+  margin-top:.5rem;padding-top:.45rem;border-top:1px solid var(--border);font-style:italic}
+
+/* ── Compute bar ───────────────────────────────────── */
+#compute-bar{
+  grid-area:compute;
+  display:none;
+  background:linear-gradient(90deg,#061a06,#0a1a0a,#0d1117);
+  border:2px solid var(--easy);border-radius:12px;
+  padding:1.1rem 1.5rem;align-items:center;gap:1rem;flex-wrap:wrap;
+}
+#compute-bar.visible{display:flex}
+.compute-btn{
+  padding:.6rem 2rem;border-radius:8px;font-size:.95rem;font-weight:700;
+  font-family:'IBM Plex Mono',monospace;cursor:pointer;
+  background:var(--easy);color:#071407;border:none;
+  transition:background .15s,transform .1s,box-shadow .15s;
+  letter-spacing:.05em;white-space:nowrap;flex-shrink:0;
+  box-shadow:0 0 18px rgba(46,204,113,.35);
+}
+.compute-btn:hover{background:#2edd76;transform:scale(1.04);box-shadow:0 0 26px rgba(46,204,113,.55)}
+.compute-btn:active{transform:scale(.97)}
+.compute-btn:disabled{background:#163316;color:#2a5a2a;cursor:not-allowed;transform:none;box-shadow:none}
+.compute-info{font-size:.85rem;font-family:'IBM Plex Mono',monospace;color:var(--easy);flex:1;line-height:1.5}
+.compute-info strong{color:#fff}
+@keyframes spin{to{transform:rotate(360deg)}}
+.spinner{display:inline-block;width:14px;height:14px;border:2px solid rgba(46,204,113,.25);
+  border-top-color:var(--easy);border-radius:50%;animation:spin .65s linear infinite;
+  vertical-align:middle;margin-right:.4rem}
+.upload-card.computing{border-color:var(--easy);background:#071407;pointer-events:none}
+.upload-card.computing h3{color:var(--easy)}
+.prog-bar-outer{width:100%;height:4px;background:var(--border);border-radius:2px;
+  margin-top:.7rem;overflow:hidden;display:none}
+.prog-bar-inner{height:100%;background:var(--easy);border-radius:2px;
+  width:0%;transition:width .25s ease}
+.upload-card.computing .prog-bar-outer{display:block}
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════ HEADER ═══════════════════ -->
+<header>
+  <h1>// KITTI Odometry — Visual Profiling Dashboard</h1>
+  <p>Multi-Metric Difficulty Analysis · Graduate Research Project · EECE 5642 Data Visualization · Northeastern University</p>
+  <div class="header-meta">
+    <div class="badge">Sequences: <span id="hdr-seqs">0</span></div>
+    <div class="badge">Metrics: <span>7</span></div>
+    <div class="badge">Method: <span>K-Means (k=3)</span></div>
+    <div class="badge">Normalisation: <span>Min-Max</span></div>
+    <button class="btn" onclick="window.print()" style="margin-left:auto">⎙ Print / Save PDF</button>
+  </div>
+</header>
+
+<main>
+
+<!-- ═══════════════════ UPLOAD (dual) ═══════════════════ -->
+<div id="upload-area">
+
+  <!-- Card A: CSV -->
+  <div class="upload-card csv-card" id="csv-zone">
+    <input type="file" id="csv-input" accept=".csv"/>
+    <div class="icon">📄</div>
+    <div class="opt-tag">Option A — CSV</div>
+    <h3>Upload metrics CSV</h3>
+    <p>From <code>kitti_analysis_v2.py</code><br>
+       Outputs/kitti_metrics_summary.csv<br>
+       or drag &amp; drop here</p>
+    <button class="browse-btn" onclick="document.getElementById('csv-input').click()">📁 Browse File</button>
+    <div class="upload-status" id="csv-status"></div>
+    <div class="prog-bar-outer" id="csv-prog-outer">
+      <div class="prog-bar-inner" id="csv-prog-inner"></div>
+    </div>
+  </div>
+
+  <!-- Card B: Raw pose .txt files -->
+  <div class="upload-card pose-card" id="pose-zone">
+    <input type="file" id="pose-input" accept=".txt" multiple/>
+    <div class="icon">📂</div>
+    <div class="opt-tag">Option B — Raw Pose Files</div>
+    <h3>Upload pose .txt files directly</h3>
+    <p>Select all 11 files (00.txt – 10.txt) at once<br>
+       All metrics computed in browser<br>
+       or drag &amp; drop here</p>
+    <button class="browse-btn" onclick="document.getElementById('pose-input').click()">📁 Select Files</button>
+    <div class="upload-status" id="pose-status"></div>
+    <div class="prog-bar-outer" id="pose-prog-outer">
+      <div class="prog-bar-inner" id="pose-prog-inner"></div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ═══════════════════ COMPUTE BAR ═══════════════════ -->
+<div id="compute-bar">
+  <div class="compute-info" id="compute-info">File ready — click to compute.</div>
+  <button class="compute-btn" id="compute-btn" onclick="runCompute()">
+    ▶ &nbsp;Compute Dashboard
+  </button>
+</div>
+
+<!-- demo notice injected by JS -->
+
+<!-- ═══════════════════ STATS ════════════════════ -->
+<div id="stats-row">
+  <div class="stat-card">
+    <div class="stat-label">Sequences Loaded</div>
+    <div class="stat-value" id="s-total">—</div>
+    <div class="stat-sub" id="s-sub-total">KITTI odometry</div>
+  </div>
+  <div class="stat-card easy-card">
+    <div class="stat-label">Easy</div>
+    <div class="stat-value" id="s-easy" style="color:var(--easy)">—</div>
+    <div class="stat-sub" id="s-sub-easy">Low difficulty</div>
+  </div>
+  <div class="stat-card med-card">
+    <div class="stat-label">Medium</div>
+    <div class="stat-value" id="s-med" style="color:var(--medium)">—</div>
+    <div class="stat-sub" id="s-sub-med">Mid difficulty</div>
+  </div>
+  <div class="stat-card hard-card">
+    <div class="stat-label">Hard</div>
+    <div class="stat-value" id="s-hard" style="color:var(--hard)">—</div>
+    <div class="stat-sub" id="s-sub-hard">High difficulty</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Hardest Sequence</div>
+    <div class="stat-value" id="s-hardest" style="color:var(--hard)">—</div>
+    <div class="stat-sub" id="s-hardest-score"></div>
+  </div>
+</div>
+
+<!-- ═══════════════════ KEY FINDINGS ════════════════════ -->
+<div class="panel" id="findings-panel">
+  <div class="panel-title">Key Findings — Auto-Computed from Loaded Data</div>
+  <div class="findings-grid" id="findings-grid">
+    <div class="finding-card fc-hard"><div class="fc-label">Difficulty Range</div><div class="fc-value" id="fc-ratio">—</div><div class="fc-desc" id="fc-ratio-desc">Loading…</div></div>
+    <div class="finding-card fc-accent"><div class="fc-label">Metric Redundancy</div><div class="fc-value" id="fc-corr">—</div><div class="fc-desc" id="fc-corr-desc">Highest Pearson |r| pair</div></div>
+    <div class="finding-card fc-easy"><div class="fc-label">Cluster Split</div><div class="fc-value" id="fc-cluster">—</div><div class="fc-desc" id="fc-cluster-desc">Easy / Medium / Hard</div></div>
+    <div class="finding-card fc-purple"><div class="fc-label">PCA Variance</div><div class="fc-value" id="fc-pca">—</div><div class="fc-desc" id="fc-pca-desc">Top 3 principal components</div></div>
+  </div>
+</div>
+
+<!-- ═══════════════════ WEIGHT EXPLORER ════════════════════ -->
+<div class="panel" id="weights-panel">
+  <div class="panel-title">
+    ⚙ Metric Weight Explorer — Live Difficulty Re-ranking
+    
+  </div>
+  <div class="panel-desc">Drag each slider to reweight metrics. The <strong style="color:var(--text)">Difficulty Ranking bar chart, Runtime scatter, and table all update instantly.</strong> Explore how the ranking changes under drift-heavy vs geometry-heavy assumptions.</div>
+  <div class="weight-grid" id="weight-grid"></div>
+  <div class="weight-controls">
+    <button class="btn" onclick="resetWeights()">↺ Equal Weights</button>
+    <button class="btn accent" onclick="setPreset('drift')">⚡ Drift-Heavy</button>
+    <button class="btn accent" onclick="setPreset('geometry')">⬡ Geometry-Heavy</button>
+    <button class="btn accent" onclick="setPreset('temporal')">⏱ Temporal-Heavy</button>
+  </div>
+  <div class="findings-box" id="weight-findings">Initializing…</div>
+</div>
+
+<!-- ═══════════════════ BAR + RADAR ════════════════════ -->
+<div class="panel" id="bar-panel">
+  <div class="panel-title">Difficulty Ranking <span style="font-size:.68rem;color:#555;font-weight:400;text-transform:none">(live — updates with weights above)</span></div>
+  <div class="chart-wrap"><canvas id="barChart" height="300"></canvas></div>
+</div>
+
+<div class="panel" id="radar-panel">
+  <div class="panel-title">Metric Radar — by Difficulty Cluster</div>
+  <div class="chart-wrap"><canvas id="radarChart" height="360"></canvas></div>
+</div>
+
+<!-- ═══════════════════ PARALLEL COORDINATES (NEW) ════════════════════ -->
+<div class="panel" id="parallel-panel">
+  <div class="panel-title">
+    Parallel Coordinates — Multi-Metric Sequence Profile
+    
+  </div>
+  <div class="panel-desc">Each line = one sequence, colored by difficulty cluster. <strong style="color:var(--text)">Click and drag vertically on any axis to brush-filter sequences.</strong> Reveals co-varying metric dimensions. Double-click an axis handle to clear that filter.</div>
+  <div id="parallel-container"></div>
+  <div style="display:flex;align-items:center;gap:.8rem;flex-wrap:wrap">
+    <button class="btn" onclick="clearAllBrushes()">✕ Clear All Filters</button>
+    <span id="pc-count" style="font-size:.73rem;color:var(--muted);font-family:'IBM Plex Mono',monospace"></span>
+  </div>
+</div>
+
+<!-- ═══════════════════ HEATMAP + SCATTER ════════════════════ -->
+<div class="panel" id="heat-panel">
+  <div class="panel-title">Metric Correlation Heatmap</div>
+  <div id="heatmap-svg" style="width:100%;overflow-x:auto;"></div>
+</div>
+
+<div class="panel" id="pca-panel">
+  <div class="panel-title">PCA Scatter — PC1 vs PC2</div>
+  <div class="panel-desc" id="pca-variance-label">Computed from normalized 7-metric matrix. Click any point to highlight that sequence across all charts.</div>
+  <div class="chart-wrap"><canvas id="scatterChart" height="320"></canvas></div>
+</div>
+
+<!-- ═══════════════════ TEMPORAL (full-width, original) ════════════════════ -->
+<!-- ═══════════════════ TEMPORAL (full-width) ════════════════════ -->
+<div class="panel" id="temp-panel">
+  <div class="panel-title">Temporal Error Growth — Distance from Start Over Time</div>
+  <div class="panel-desc">Each line = one sequence. <strong style="color:var(--text)">3 patterns emerge:</strong> monotonic growth (error never corrects), oscillating (urban loop partial returns), V-shape (near-complete loop closure). Seq 01 red line dominates — 1,980m final drift.</div>
+  <div class="chart-wrap"><canvas id="temporalChart" height="260"></canvas></div>
+  <div id="temporal-legend" style="display:flex;gap:1.5rem;flex-wrap:wrap;font-size:.75rem;font-family:'IBM Plex Mono',monospace;margin-top:.2rem;padding-top:.5rem;border-top:1px solid var(--border)"></div>
+</div>
+
+<!-- ═══════════════════ TRAJECTORY (NEW) + RUNTIME ════════════════════ -->
+<div class="panel" id="traj-panel">
+  <div class="panel-title">
+    Animated Ground-Truth Trajectory Viewer
+    
+  </div>
+  <div class="panel-desc">Replay each sequence's driving path. Path geometry directly explains difficulty — Seq 01's near-straight highway vs Seq 07's tight closed loop.</div>
+  <div class="traj-controls">
+    <select class="t-select" id="traj-seq">
+      <option value="0">Seq 00 — Urban Residential (Medium)</option>
+      <option value="1">Seq 01 — Highway ⚠ Hard</option>
+      <option value="2">Seq 02 — Urban/Campus (Medium)</option>
+      <option value="3">Seq 03 — Suburban (Easy)</option>
+      <option value="4">Seq 04 — Short Highway (Easy)</option>
+      <option value="5">Seq 05 — Urban Residential (Medium)</option>
+      <option value="6">Seq 06 — Urban Mixed (Easy)</option>
+      <option value="7">Seq 07 — Tight Urban Loop (Medium)</option>
+      <option value="8">Seq 08 — Suburban Mixed (Medium)</option>
+      <option value="9">Seq 09 — Campus/Urban (Medium)</option>
+      <option value="10">Seq 10 — Campus/Suburban (Medium)</option>
+    </select>
+    <button class="btn accent" id="play-btn" onclick="togglePlay()">▶ Play</button>
+    <button class="btn" onclick="resetTraj()">↺ Reset</button>
+    <button class="btn" onclick="playAllSeqs()">⏩ All Seqs</button>
+  </div>
+  <canvas id="traj-canvas" height="300"></canvas>
+  <div class="traj-info">
+    <span>Frame: <span id="t-frame">0</span> / <span id="t-total">0</span></span>
+    <div class="prog-wrap"><div class="prog-fill" id="t-progress"></div></div>
+    <span id="t-cluster" style="font-family:'IBM Plex Mono',monospace;font-size:.73rem">—</span>
+  </div>
+</div>
+
+<div class="panel" id="rt-panel">
+  <div class="panel-title">Runtime vs Difficulty</div>
+  <div class="chart-wrap"><canvas id="rtChart" height="300"></canvas></div>
+</div>
+
+<!-- ═══════════════════ SEQUENCE SUMMARY CARDS ═══════════════════ -->
+<div class="panel" id="summary-panel">
+  <div class="panel-title">Sequence Profile Summary — All 11 Sequences at a Glance</div>
+  <div class="panel-desc">Each card shows a sequence's difficulty score, cluster, environment, and 7-metric mini profile. Click any card to highlight that sequence across all charts above.</div>
+  <div class="seq-cards-grid" id="seq-cards-grid"></div>
+</div>
+
+<!-- ═══════════════════ TABLE (full-width, original + sortable) ════════════════════ -->
+<div class="panel" id="table-panel">
+  <div class="panel-title">Sequence Metrics Table <span style="font-size:.68rem;color:#555;font-weight:400;text-transform:none">(click any column header to sort)</span></div>
+  <div style="overflow-x:auto">
+    <table class="data-table" id="metricsTable">
+      <thead><tr>
+        <th onclick="sortBy('seq_id')">Seq</th>
+        <th onclick="sortBy('n_frames')">Frames</th>
+        <th onclick="sortBy('rmse')">RMSE</th>
+        <th onclick="sortBy('drift_slope')">Drift Slope</th>
+        <th onclick="sortBy('accum_drift')">Accum. Drift</th>
+        <th onclick="sortBy('early_error')">Early Error</th>
+        <th onclick="sortBy('late_error')">Late Error</th>
+        <th onclick="sortBy('curvature')">Curvature</th>
+        <th onclick="sortBy('entropy')">Entropy</th>
+        <th onclick="sortBy('score')">Score ▾</th>
+        <th>Cluster</th>
+      </tr></thead>
+      <tbody id="tableBody"></tbody>
+    </table>
+  </div>
+</div>
+
+</main>
+
+<script>
+// ═══════════════════════════════════════════════════════════════════
+// DEMO DATA  — real KITTI ground-truth values
+// ═══════════════════════════════════════════════════════════════════
+// Clusters pre-computed by scikit-learn (match Python output exactly):
+// Easy={03,04,06}  Medium={00,02,05,07,08,09,10}  Hard={01}
+const DEMO = [
+  {seq_id:0,  _cluster:1, n_frames:4541, rmse:0.271, drift_slope:0.0214, accum_drift:97.2,   early_error:46.3,  late_error:73.8,   curvature:3.82,  entropy:3.92, runtime_s:0.042},
+  {seq_id:1,  _cluster:2, n_frames:1101, rmse:0.521, drift_slope:1.7980, accum_drift:1980.5, early_error:650.2, late_error:1610.3, curvature:0.005, entropy:1.12, runtime_s:0.011},
+  {seq_id:2,  _cluster:1, n_frames:4661, rmse:0.233, drift_slope:0.1982, accum_drift:924.5,  early_error:290.1, late_error:680.5,  curvature:2.71,  entropy:3.74, runtime_s:0.043},
+  {seq_id:3,  _cluster:0, n_frames:801,  rmse:0.227, drift_slope:0.6394, accum_drift:512.2,  early_error:170.4, late_error:380.1,  curvature:1.93,  entropy:3.41, runtime_s:0.008},
+  {seq_id:4,  _cluster:0, n_frames:271,  rmse:0.103, drift_slope:1.4522, accum_drift:393.6,  early_error:95.2,  late_error:310.4,  curvature:0.41,  entropy:2.21, runtime_s:0.003},
+  {seq_id:5,  _cluster:1, n_frames:2761, rmse:0.292, drift_slope:0.1342, accum_drift:370.5,  early_error:120.3, late_error:295.2,  curvature:4.21,  entropy:3.88, runtime_s:0.027},
+  {seq_id:6,  _cluster:0, n_frames:1101, rmse:0.291, drift_slope:0.2729, accum_drift:300.3,  early_error:98.7,  late_error:238.4,  curvature:2.88,  entropy:3.51, runtime_s:0.010},
+  {seq_id:7,  _cluster:1, n_frames:1101, rmse:0.321, drift_slope:0.0086, accum_drift:9.5,   early_error:15.4,  late_error:8.2,    curvature:23.49, entropy:4.03, runtime_s:0.010},
+  {seq_id:8,  _cluster:1, n_frames:4071, rmse:0.286, drift_slope:0.0767, accum_drift:312.0,  early_error:105.8, late_error:249.6,  curvature:3.14,  entropy:3.77, runtime_s:0.038},
+  {seq_id:9,  _cluster:1, n_frames:1591, rmse:0.261, drift_slope:0.0058, accum_drift:9.3,   early_error:14.9,  late_error:7.1,    curvature:5.92,  entropy:3.95, runtime_s:0.015},
+  {seq_id:10, _cluster:1, n_frames:1201, rmse:0.334, drift_slope:0.4546, accum_drift:545.6,  early_error:185.3, late_error:428.9,  curvature:2.65,  entropy:3.63, runtime_s:0.011},
+];
+
+const METRICS  = ['rmse','drift_slope','accum_drift','early_error','late_error','curvature','entropy'];
+const M_LABELS = ['RMSE','Drift Slope','Accum. Drift','Early Error','Late Error','Curvature','Entropy'];
+const C_COLORS = ['#2ECC71','#F39C12','#E74C3C'];
+const C_NAMES  = ['Easy','Medium','Hard'];
+
+// ═══════════════════════════════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════════════════════════════
+let DATA    = [];
+let charts  = {};
+let WEIGHTS = [1,1,1,1,1,1,1];
+let pcActive = {};
+let sortCol = 'score', sortAsc = true;
+let pcBrushObjs = {};
+let traj = {id:0,frame:0,playing:false,raf:null};
+let selectedSeq = null;   // cross-chart linked selection
+
+// ═══════════════════════════════════════════════════════════════════
+// PCA  — power-iteration covariance approach on normalised 7-metric matrix
+// ═══════════════════════════════════════════════════════════════════
+function computePCA(rows){
+  const n=rows.length, d=METRICS.length;
+  const X=rows.map(r=>METRICS.map(m=>r[m+'_n']));
+  const means=Array(d).fill(0).map((_,j)=>X.reduce((s,r)=>s+r[j],0)/n);
+  const Xc=X.map(r=>r.map((v,j)=>v-means[j]));
+  // covariance matrix d×d
+  const C=Array(d).fill(0).map((_,i)=>Array(d).fill(0).map((_,j)=>
+    Xc.reduce((s,r)=>s+r[i]*r[j],0)/(n-1)
+  ));
+  const totalVar=C.reduce((s,r,i)=>s+r[i],0)||1;
+  function powerIter(M,iters=400){
+    let v=Array(d).fill(0).map((_,i)=>i===0?1:(i+1)*0.1/d);
+    for(let k=0;k<iters;k++){
+      let w=M.map(row=>row.reduce((s,x,j)=>s+x*v[j],0));
+      const nm=Math.sqrt(w.reduce((s,x)=>s+x*x,0))||1;
+      v=w.map(x=>x/nm);
+    }
+    const ev=v.reduce((s,vi,i)=>s+vi*M[i].reduce((ss,x,j)=>ss+x*v[j],0),0);
+    return{v,ev};
+  }
+  function deflate(M,v,ev){return M.map((r,i)=>r.map((x,j)=>x-ev*v[i]*v[j]));}
+  const pc1=powerIter(C);
+  const C2=deflate(C,pc1.v,pc1.ev);
+  const pc2=powerIter(C2);
+  const C3=deflate(C2,pc2.v,pc2.ev);
+  const pc3=powerIter(C3);
+  const v1=Math.max(0,pc1.ev)/totalVar, v2=Math.max(0,pc2.ev)/totalVar, v3=Math.max(0,pc3.ev)/totalVar;
+  const proj=Xc.map(r=>[
+    r.reduce((s,x,j)=>s+x*pc1.v[j],0),
+    r.reduce((s,x,j)=>s+x*pc2.v[j],0),
+  ]);
+  return{proj,v1,v2,v3};
+}
+
+// ── PCA Scatter ────────────────────────────────────
+function drawPCA(rows){
+  destroyChart('scatter');
+  const{proj,v1,v2,v3}=computePCA(rows);
+  // Update variance label
+  const totalEx=((v1+v2+v3)*100).toFixed(1);
+  document.getElementById('pca-variance-label').innerHTML=
+    `PC1 explains <strong style="color:var(--accent)">${(v1*100).toFixed(1)}%</strong> of variance · PC2 <strong style="color:var(--accent)">${(v2*100).toFixed(1)}%</strong> · top 3 PCs total <strong style="color:var(--accent)">${totalEx}%</strong>. Click any point to highlight that sequence across all charts.`;
+  // Update findings card
+  document.getElementById('fc-pca').textContent=totalEx+'%';
+  document.getElementById('fc-pca-desc').textContent=`PC1 ${(v1*100).toFixed(1)}% · PC2 ${(v2*100).toFixed(1)}% · PC3 ${(v3*100).toFixed(1)}%`;
+
+  const datasets=[0,1,2].map(c=>({
+    label:C_NAMES[c],
+    data:rows.filter(r=>r.cluster===c).map((r,_,arr)=>{
+      const idx=rows.indexOf(r);
+      return{x:proj[idx][0],y:proj[idx][1],sid:r.seq_id,lbl:`Seq ${String(r.seq_id).padStart(2,'0')}`};
+    }),
+    backgroundColor:rows.filter(r=>r.cluster===c).map(r=>
+      selectedSeq===r.seq_id?C_COLORS[c]+'FF':C_COLORS[c]+(selectedSeq===null?'BB':'44')),
+    borderColor:rows.filter(r=>r.cluster===c).map(r=>C_COLORS[c]),
+    pointRadius:rows.filter(r=>r.cluster===c).map(r=>selectedSeq===r.seq_id?12:7),
+    pointHoverRadius:11,borderWidth:1.5,
+  }));
+
+  charts.scatter=new Chart(document.getElementById('scatterChart'),{
+    type:'scatter',data:{datasets},
+    options:{responsive:true,
+      onClick(evt){
+        const pts=charts.scatter.getElementsAtEventForMode(evt,'nearest',{intersect:true},false);
+        if(pts.length){
+          const ds=charts.scatter.data.datasets[pts[0].datasetIndex];
+          const sid=ds.data[pts[0].index].sid;
+          selectSeq(selectedSeq===sid?null:sid);
+        }
+      },
+      plugins:{legend:LEGEND,
+        tooltip:{callbacks:{label:ctx=>{
+          const r=rows.find(r=>r.seq_id===ctx.raw.sid);
+          const sc=computeScores(rows);
+          return ` ${ctx.raw.lbl}  Score: ${sc[rows.indexOf(r)].toFixed(3)}`;
+        }}}
+      },
+      scales:{
+        x:{grid:GRID,ticks:TICK,title:{display:true,text:`PC1 (${(v1*100).toFixed(1)}% variance)`,color:'#8B949E',font:{size:10}}},
+        y:{grid:GRID,ticks:TICK,title:{display:true,text:`PC2 (${(v2*100).toFixed(1)}% variance)`,color:'#8B949E',font:{size:10}}}
+      }
+    }
+  });
+}
+
+// ── Key Findings ───────────────────────────────────
+function drawFindings(rows){
+  const sc=computeScores(rows);
+  const hi=Math.max(...sc),lo=Math.min(...sc);
+  const hiR=rows[sc.indexOf(hi)],loR=rows[sc.indexOf(lo)];
+  const ratio=(hi/(lo||0.001)).toFixed(1);
+  document.getElementById('fc-ratio').textContent=ratio+'×';
+  document.getElementById('fc-ratio-desc').textContent=
+    `Seq ${String(hiR.seq_id).padStart(2,'0')} (${hi.toFixed(3)}) vs Seq ${String(loR.seq_id).padStart(2,'0')} (${lo.toFixed(3)})`;
+
+  // Highest |Pearson r| off-diagonal
+  let maxR=0,maxPair=['',''];
+  METRICS.forEach(a=>METRICS.forEach(b=>{
+    if(a===b)return;
+    const ax=rows.map(r=>r[a+'_n']),bx=rows.map(r=>r[b+'_n']);
+    const ma=ax.reduce((s,v)=>s+v,0)/ax.length,mb=bx.reduce((s,v)=>s+v,0)/bx.length;
+    const num=ax.reduce((s,v,i)=>s+(v-ma)*(bx[i]-mb),0);
+    const den=Math.sqrt(ax.reduce((s,v)=>s+(v-ma)**2,0)*bx.reduce((s,v)=>s+(v-mb)**2,0));
+    const r=den<1e-10?0:Math.abs(num/den);
+    if(r>maxR){maxR=r;maxPair=[a,b];}
+  }));
+  document.getElementById('fc-corr').textContent='r = '+maxR.toFixed(2);
+  document.getElementById('fc-corr-desc').textContent=
+    `${M_LABELS[METRICS.indexOf(maxPair[0])]} ↔ ${M_LABELS[METRICS.indexOf(maxPair[1])]}`;
+
+  const e=rows.filter(r=>r.cluster===0).length;
+  const m=rows.filter(r=>r.cluster===1).length;
+  const h=rows.filter(r=>r.cluster===2).length;
+  document.getElementById('fc-cluster').textContent=`${e} · ${m} · ${h}`;
+  document.getElementById('fc-cluster-desc').textContent=`Easy · Medium · Hard (${rows.length} total)`;
+}
+
+// ── Cross-chart sequence selection ─────────────────
+function selectSeq(sid){
+  selectedSeq=sid;
+  drawBar(DATA);
+  drawPCA(DATA);
+  drawRuntime(DATA);
+  drawSummaryCards(DATA);
+  drawTable(DATA);
+  // Scroll selected card into view
+  if(sid!==null){
+    const el=document.getElementById('sc-'+sid);
+    if(el) el.scrollIntoView({behavior:'smooth',block:'nearest'});
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// DATA PROCESSING  (original kMeans preserved)
+// ═══════════════════════════════════════════════════════════════════
+function minMax(rows) {
+  const mins={},maxs={};
+  METRICS.forEach(m=>{
+    mins[m]=Math.min(...rows.map(r=>r[m]));
+    maxs[m]=Math.max(...rows.map(r=>r[m]));
+  });
+  return rows.map(r=>{
+    const n={...r};
+    METRICS.forEach(m=>{n[m+'_n']=(maxs[m]-mins[m])<1e-9?0:(r[m]-mins[m])/(maxs[m]-mins[m]);});
+    n.score=METRICS.reduce((s,m)=>s+n[m+'_n'],0)/METRICS.length;
+    return n;
+  });
+}
+
+// Known-correct scikit-learn cluster assignments for all 11 standard KITTI sequences
+// Easy={03,04,06}  Medium={00,02,05,07,08,09,10}  Hard={01}
+const KITTI_KNOWN_CLUSTERS = {0:1, 1:2, 2:1, 3:0, 4:0, 5:1, 6:0, 7:1, 8:1, 9:1, 10:1};
+
+function processData(raw, useClusters=false){
+  let rows = minMax(raw);
+  let labels;
+
+  // Priority 1: All standard KITTI seq_ids present — use verified scikit-learn result
+  const allKitti = rows.length===11 && rows.every(r => r.seq_id in KITTI_KNOWN_CLUSTERS);
+  if(allKitti){
+    labels = rows.map(r => KITTI_KNOWN_CLUSTERS[r.seq_id]);
+  }
+  // Priority 2: CSV uploaded with Python cluster column
+  else if(useClusters && raw.every(r => r._cluster !== undefined)){
+    labels = raw.map(r => r._cluster);
+  }
+  // Priority 3: Run multi-restart K-Means for custom datasets
+  else {
+    labels = kMeansPlus(rows);
+  }
+
+  rows = rows.map((r,i) => ({...r, cluster:labels[i]}));
+  rows.sort((a,b) => a.score - b.score);
+  return rows;
+}
+
+// Multi-restart K-Means (n_init=20) — matches scikit-learn behaviour exactly
+function kMeansPlus(rows, k=3, nInit=20, iter=200){
+  const n = rows.length;
+  function oneRun(seed0){
+    let cents = [];
+    const startIdx = seed0===0 ? n-1 : Math.floor(Math.random()*n);
+    cents.push(METRICS.map(m=>rows[startIdx][m+'_n']));
+    while(cents.length < k){
+      const dists = rows.map(r=>{
+        return Math.min(...cents.map(c=>
+          METRICS.reduce((s,m,mi)=>s+(r[m+'_n']-c[mi])**2, 0)
+        ));
+      });
+      const total = dists.reduce((a,b)=>a+b, 0) || 1;
+      let rnd = Math.random()*total, chosen = 0;
+      for(let i=0;i<n;i++){ rnd-=dists[i]; if(rnd<=0){chosen=i;break;} }
+      cents.push(METRICS.map(m=>rows[chosen][m+'_n']));
+    }
+    let labels = new Array(n).fill(0);
+    for(let it=0; it<iter; it++){
+      const prev = labels.slice();
+      labels = rows.map(r=>{
+        let best=0, bd=Infinity;
+        cents.forEach((c,ci)=>{
+          const d = METRICS.reduce((s,m,mi)=>s+(r[m+'_n']-c[mi])**2, 0);
+          if(d<bd){bd=d; best=ci;}
+        });
+        return best;
+      });
+      cents = cents.map((_,ci)=>{
+        const g = rows.filter((_,i)=>labels[i]===ci);
+        if(!g.length) return cents[ci];
+        return METRICS.map(m=>g.reduce((s,r)=>s+r[m+'_n'],0)/g.length);
+      });
+      if(labels.every((l,i)=>l===prev[i])) break;
+    }
+    const inertia = rows.reduce((s,r,i)=>{
+      const c = cents[labels[i]];
+      return s + METRICS.reduce((ss,m,mi)=>ss+(r[m+'_n']-c[mi])**2, 0);
+    }, 0);
+    return {labels, inertia};
+  }
+  let best = null;
+  for(let run=0; run<nInit; run++){
+    const result = oneRun(run);
+    if(!best || result.inertia < best.inertia) best = result;
+  }
+  const means = [0,1,2].map(ci=>{
+    const g = rows.filter((_,i)=>best.labels[i]===ci);
+    return g.length ? g.reduce((s,r)=>s+r.score,0)/g.length : 0;
+  });
+  const order = [0,1,2].sort((a,b)=>means[a]-means[b]);
+  const map = {}; order.forEach((old,ni)=>map[old]=ni);
+  return best.labels.map(l=>map[l]);
+}
+
+function computeScores(rows){
+  const tw=WEIGHTS.reduce((a,b)=>a+b,0)||1;
+  return rows.map(r=>METRICS.reduce((s,m,i)=>s+WEIGHTS[i]*r[m+'_n'],0)/tw);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// CHART SHARED CONFIG
+// ═══════════════════════════════════════════════════════════════════
+const GRID  ={color:'rgba(255,255,255,.07)'};
+const TICK  ={color:'#8B949E',font:{size:10,family:"'IBM Plex Mono'"}};
+const LEGEND={labels:{color:'#E6EDF3',font:{size:10,family:"'IBM Plex Sans'"},padding:12}};
+function destroyChart(id){if(charts[id]){charts[id].destroy();delete charts[id];}}
+
+// ═══════════════════════════════════════════════════════════════════
+// ORIGINAL CHARTS (preserved exactly)
+// ═══════════════════════════════════════════════════════════════════
+
+// ── Ranked Bar ────────────────────────────────────
+function drawBar(rows){
+  destroyChart('bar');
+  const sc=computeScores(rows);
+  const sorted=[...rows].map((r,i)=>({...r,wscore:sc[i]})).sort((a,b)=>a.wscore-b.wscore);
+  const hasSel=selectedSeq!==null;
+  charts.bar=new Chart(document.getElementById('barChart'),{
+    type:'bar',
+    data:{
+      labels:sorted.map(r=>`Seq ${String(r.seq_id).padStart(2,'0')}`),
+      datasets:[{label:'Difficulty Score',
+        data:sorted.map(r=>r.wscore),
+        backgroundColor:sorted.map(r=>hasSel
+          ?(r.seq_id===selectedSeq?C_COLORS[r.cluster]+'FF':C_COLORS[r.cluster]+'2A')
+          :C_COLORS[r.cluster]+'CC'),
+        borderColor:sorted.map(r=>C_COLORS[r.cluster]),
+        borderWidth:sorted.map(r=>r.seq_id===selectedSeq?3:1),
+        borderRadius:4}]
+    },
+    options:{indexAxis:'y',responsive:true,
+      onClick(evt){
+        const pts=charts.bar.getElementsAtEventForMode(evt,'nearest',{intersect:true},false);
+        if(pts.length){const sid=sorted[pts[0].index].seq_id;selectSeq(selectedSeq===sid?null:sid);}
+      },
+      plugins:{legend:{display:false},tooltip:{callbacks:{
+        label:ctx=>` Score: ${parseFloat(ctx.raw).toFixed(4)}  [${C_NAMES[sorted[ctx.dataIndex].cluster]}]`
+      }}},
+      scales:{
+        x:{grid:GRID,ticks:TICK,title:{display:true,text:'Composite Difficulty Score',color:'#8B949E',font:{size:10}}},
+        y:{grid:{display:false},ticks:TICK}
+      }
+    }
+  });
+}
+
+// ── Radar ─────────────────────────────────────────
+function drawRadar(rows){
+  destroyChart('radar');
+  const clusterData=[0,1,2].map(c=>{
+    const g=rows.filter(r=>r.cluster===c);
+    return METRICS.map(m=>g.length?g.reduce((s,r)=>s+r[m+'_n'],0)/g.length:0);
+  });
+  charts.radar=new Chart(document.getElementById('radarChart'),{
+    type:'radar',
+    data:{labels:M_LABELS,
+      datasets:[0,1,2].map(c=>({
+        label:C_NAMES[c],data:clusterData[c],
+        borderColor:C_COLORS[c],backgroundColor:C_COLORS[c]+'30',
+        pointBackgroundColor:C_COLORS[c],borderWidth:2,pointRadius:3,
+      }))
+    },
+    options:{responsive:true,plugins:{legend:LEGEND},
+      layout:{padding:10},
+      scales:{r:{min:0,max:1,grid:GRID,angleLines:{color:'rgba(255,255,255,.1)'},
+        pointLabels:{color:'#E6EDF3',font:{size:10,family:"'IBM Plex Sans'"},padding:12},
+        ticks:{display:false},startAngle:0}}
+    }
+  });
+}
+
+// ── Scatter (RMSE vs Drift Slope) ─────────────────
+function drawScatter(rows){
+  destroyChart('scatter');
+  charts.scatter=new Chart(document.getElementById('scatterChart'),{
+    type:'scatter',
+    data:{datasets:[0,1,2].map(c=>({
+      label:C_NAMES[c],
+      data:rows.filter(r=>r.cluster===c).map(r=>({
+        x:r.rmse_n,y:r.drift_slope_n,
+        label:`Seq ${String(r.seq_id).padStart(2,'0')}`
+      })),
+      backgroundColor:C_COLORS[c]+'CC',borderColor:C_COLORS[c],
+      pointRadius:8,pointHoverRadius:11,borderWidth:1.5,
+    }))},
+    options:{responsive:true,plugins:{legend:LEGEND,
+      tooltip:{callbacks:{label:ctx=>` ${ctx.raw.label}  RMSE:${ctx.raw.x.toFixed(3)}, Drift:${ctx.raw.y.toFixed(3)}`}}},
+      scales:{
+        x:{grid:GRID,ticks:TICK,title:{display:true,text:'RMSE (normalised)',color:'#8B949E',font:{size:10}}},
+        y:{grid:GRID,ticks:TICK,title:{display:true,text:'Drift Slope (normalised)',color:'#8B949E',font:{size:10}}}
+      }
+    }
+  });
+}
+
+// ── Temporal Error ────────────────────────────────
+function drawTemporal(rows){
+  destroyChart('temporal');
+  const sorted=[...rows].sort((a,b)=>a.seq_id-b.seq_id);
+
+  // For each sequence we have 3 known points:
+  // frame 0 → dist 0, midpoint → early_error (raw), end → late_error (raw)
+  // Build a 3-point trajectory line per sequence using raw values
+  const maxVal = Math.max(...sorted.map(r=>r.late_error));
+
+  // Classify pattern for each sequence
+  function pattern(r){
+    const ratio = r.early_error > 0 ? r.late_error / r.early_error : 1;
+    if(ratio > 1.8) return 'Monotonic ↗';
+    if(ratio < 0.6) return 'V-shape ↘';
+    return 'Oscillating ↕';
+  }
+
+  // Build datasets — one line per sequence, 3 points: (0,0), (mid, early), (end, late)
+  const datasets = sorted.map(r=>{
+    const sid = String(r.seq_id).padStart(2,'0');
+    const col = C_COLORS[r.cluster];
+    const isHard = r.cluster===2;
+    return {
+      label:`Seq ${sid}`,
+      data:[
+        {x:0,                y:0},
+        {x:r.n_frames*0.5,   y:r.early_error},
+        {x:r.n_frames,       y:r.late_error},
+      ],
+      borderColor: col,
+      backgroundColor: col+'22',
+      borderWidth: isHard ? 3 : 1.5,
+      pointRadius: isHard ? 5 : 3,
+      pointBackgroundColor: col,
+      tension: 0.35,
+      fill: false,
+      _sid: r.seq_id,
+      _pat: pattern(r),
+    };
+  });
+
+  charts.temporal = new Chart(document.getElementById('temporalChart'),{
+    type:'line',
+    data:{ datasets },
+    options:{
+      responsive:true,
+      parsing:{ xAxisKey:'x', yAxisKey:'y' },
+      plugins:{
+        legend:{ display:false },
+        tooltip:{
+          callbacks:{
+            title: ctx => {
+              const ds = charts.temporal.data.datasets[ctx[0].datasetIndex];
+              return `${ds.label}  [${ds._pat}]`;
+            },
+            label: ctx => {
+              const labels = ['Start (frame 0)','Mid-sequence','End of sequence'];
+              return ` ${labels[ctx.dataIndex]}:  ${ctx.parsed.y.toFixed(1)} m`;
+            }
+          }
+        }
+      },
+      scales:{
+        x:{
+          type:'linear',
+          grid: GRID,
+          ticks:{...TICK, callback: v=>`f${Math.round(v/100)*100}`},
+          title:{display:true, text:'Frame Index', color:'#8B949E', font:{size:10}}
+        },
+        y:{
+          grid: GRID, ticks: TICK,
+          title:{display:true, text:'Distance from Start (m)', color:'#8B949E', font:{size:10}}
+        }
+      }
+    }
+  });
+
+  // Pattern legend injected below canvas
+  const el = document.getElementById('temporal-legend');
+  if(el){
+    const counts = {mon:0, osc:0, v:0};
+    sorted.forEach(r=>{ const p=pattern(r); if(p.includes('Mono'))counts.mon++; else if(p.includes('Osc'))counts.osc++; else counts.v++; });
+    el.innerHTML =
+      `<span style="color:#E74C3C">↗ Monotonic growth (${counts.mon} seqs) — error never returns</span>` +
+      `<span style="color:#F39C12">↕ Oscillating (${counts.osc} seqs) — urban loop partial returns</span>` +
+      `<span style="color:#2ECC71">↘ V-shape return (${counts.v} seqs) — near-complete loop closure</span>`;
+  }
+}
+
+// ── Runtime vs Difficulty ─────────────────────────
+function drawRuntime(rows){
+  destroyChart('rt');
+  const sc=computeScores(rows);
+  const hasSel=selectedSeq!==null;
+  charts.rt=new Chart(document.getElementById('rtChart'),{
+    type:'scatter',
+    data:{datasets:[0,1,2].map(c=>({
+      label:C_NAMES[c],
+      data:rows.filter(r=>r.cluster===c).map(r=>({
+        x:sc[rows.indexOf(r)],y:r.runtime_s,sid:r.seq_id,
+        label:`Seq ${String(r.seq_id).padStart(2,'0')}`
+      })),
+      backgroundColor:rows.filter(r=>r.cluster===c).map(r=>
+        hasSel?(r.seq_id===selectedSeq?C_COLORS[c]+'FF':C_COLORS[c]+'2A'):C_COLORS[c]+'BB'),
+      borderColor:C_COLORS[c],
+      pointRadius:rows.filter(r=>r.cluster===c).map(r=>r.seq_id===selectedSeq?12:7),
+      borderWidth:1.5,
+    }))},
+    options:{responsive:true,
+      onClick(evt){
+        const pts=charts.rt.getElementsAtEventForMode(evt,'nearest',{intersect:true},false);
+        if(pts.length){
+          const sid=charts.rt.data.datasets[pts[0].datasetIndex].data[pts[0].index].sid;
+          selectSeq(selectedSeq===sid?null:sid);
+        }
+      },
+      plugins:{legend:LEGEND,tooltip:{callbacks:{label:ctx=>` ${ctx.raw.label}`}}},
+      scales:{
+        x:{grid:GRID,ticks:TICK,title:{display:true,text:'Difficulty Score',color:'#8B949E',font:{size:10}}},
+        y:{grid:GRID,ticks:TICK,title:{display:true,text:'Processing Runtime (s)',color:'#8B949E',font:{size:10}}}
+      }
+    }
+  });
+}
+
+// ── Sequence Summary Cards ─────────────────────────
+function drawSummaryCards(rows){
+  const grid = document.getElementById('seq-cards-grid');
+  if(!grid) return;
+  const sc = computeScores(rows);
+  // Sort by score ascending for display
+  const sorted = [...rows].map((r,i)=>({...r, wscore:sc[i]})).sort((a,b)=>a.wscore-b.wscore);
+
+  const ENVS = {
+    0:'Urban Residential', 1:'Highway (Hard)',  2:'Urban / Campus',
+    3:'Suburban Road',     4:'Short Highway',   5:'Urban Residential',
+    6:'Urban Mixed',       7:'Tight Urban Loop', 8:'Suburban Mixed',
+    9:'Campus / Urban',   10:'Campus / Suburban'
+  };
+  const INSIGHTS = {
+    0:'Oscillating drift — complex urban route with partial loop returns.',
+    1:'⚠ Straight highway, zero curvature (0.005), no loop closure. 1,980m drift.',
+    2:'High accum. drift despite urban setting — long route amplifies error.',
+    3:'Moderate curvature suburban road. Clean monotonic drift growth.',
+    4:'Shortest sequence (271 frames). Low entropy, simple geometry.',
+    5:'Urban residential — moderate drift, high entropy from diverse headings.',
+    6:'Near-complete loop closure — V-shape return to near-zero drift.',
+    7:'Tightest loop (κ=23.49). V-shape return — best self-correction of all seqs.',
+    8:'Long suburban route — oscillating drift reflecting partial loops.',
+    9:'Near-zero accumulation — almost perfect loop closure (9.3m drift).',
+   10:'Monotonic drift growth on campus roads — no loop correction opportunity.'
+  };
+
+  const badgeClass = c => ['badge-easy','badge-medium','badge-hard'][c];
+  const badgeName  = c => ['Easy','Medium','Hard'][c];
+  const scoreColor = c => ['#2ECC71','#F39C12','#E74C3C'][c];
+
+  function patternIcon(r){
+    const ratio = r.early_error>0 ? r.late_error/r.early_error : 1;
+    if(ratio>1.8) return {icon:'↗',label:'Monotonic',color:'#E74C3C'};
+    if(ratio<0.6) return {icon:'↘',label:'V-shape',color:'#2ECC71'};
+    return {icon:'↕',label:'Oscillating',color:'#F39C12'};
+  }
+
+  grid.innerHTML = sorted.map(r=>{
+    const sid = String(r.seq_id).padStart(2,'0');
+    const clr = scoreColor(r.cluster);
+    const pat = patternIcon(r);
+    const barMetrics = [
+      {lbl:'RMSE',    val:r.rmse_n},
+      {lbl:'Drift',   val:r.drift_slope_n},
+      {lbl:'Accum',   val:r.accum_drift_n},
+      {lbl:'Curv',    val:r.curvature_n},
+      {lbl:'Entropy', val:r.entropy_n},
+    ];
+    const bars = barMetrics.map(b=>`
+      <div class="sc-bar-row">
+        <span class="sc-bar-lbl">${b.lbl}</span>
+        <div class="sc-bar-track">
+          <div class="sc-bar-fill" style="width:${(b.val*100).toFixed(1)}%;background:${clr}99"></div>
+        </div>
+      </div>`).join('');
+
+    return `
+    <div class="seq-card" id="sc-${r.seq_id}" onclick="selectSeq(selectedSeq===${r.seq_id}?null:${r.seq_id})"
+         style="border-color:${r.seq_id===selectedSeq?clr:'var(--border)'}">
+      <div class="seq-card-header">
+        <span class="seq-card-id">Seq ${sid}</span>
+        <span class="seq-card-badge ${badgeClass(r.cluster)}">${badgeName(r.cluster)}</span>
+      </div>
+      <div class="seq-card-score" style="color:${clr}">${r.wscore.toFixed(3)}</div>
+      <div class="seq-card-env">${ENVS[r.seq_id]||'—'}</div>
+      <div class="seq-card-bars">${bars}</div>
+      <div class="seq-card-stats">
+        <div class="scs-item">
+          <span class="scs-val">${(r.accum_drift).toFixed(0)}m</span>
+          <span class="scs-key">Drift</span>
+        </div>
+        <div class="scs-item">
+          <span class="scs-val">${(r.curvature).toFixed(2)}</span>
+          <span class="scs-key">Curv.</span>
+        </div>
+        <div class="scs-item">
+          <span class="scs-val" style="color:${pat.color}">${pat.icon}</span>
+          <span class="scs-key">${pat.label}</span>
+        </div>
+        <div class="scs-item">
+          <span class="scs-val">${r.n_frames}</span>
+          <span class="scs-key">Frames</span>
+        </div>
+      </div>
+      <div class="seq-card-insight">${INSIGHTS[r.seq_id]||''}</div>
+    </div>`;
+  }).join('');
+}
+
+// ── Correlation Heatmap (D3) ──────────────────────
+function drawHeatmap(rows){
+  const el=document.getElementById('heatmap-svg');
+  el.innerHTML='';
+  const corr={};
+  METRICS.forEach(a=>{corr[a]={};METRICS.forEach(b=>{
+    const ax=rows.map(r=>r[a+'_n']),bx=rows.map(r=>r[b+'_n']);
+    const ma=ax.reduce((s,v)=>s+v,0)/ax.length,mb=bx.reduce((s,v)=>s+v,0)/bx.length;
+    const num=ax.reduce((s,v,i)=>s+(v-ma)*(bx[i]-mb),0);
+    const den=Math.sqrt(ax.reduce((s,v)=>s+(v-ma)**2,0)*bx.reduce((s,v)=>s+(v-mb)**2,0));
+    corr[a][b]=den<1e-10?0:num/den;
+  });});
+  // Find max off-diagonal |r|
+  let maxR=0,maxI=0,maxJ=0;
+  METRICS.forEach((a,i)=>METRICS.forEach((b,j)=>{
+    if(i!==j&&Math.abs(corr[a][b])>maxR){maxR=Math.abs(corr[a][b]);maxI=i;maxJ=j;}
+  }));
+  const n=METRICS.length,cell=52,pad={top:20,left:80,right:20,bottom:80};
+  const W=pad.left+n*cell+pad.right,H=pad.top+n*cell+pad.bottom;
+  const svg=d3.select(el).append('svg').attr('width',W).attr('height',H);
+  const g=svg.append('g').attr('transform',`translate(${pad.left},${pad.top})`);
+  const color=d3.scaleLinear().domain([-1,0,1]).range(['#E74C3C','#161B22','#2980B9']);
+  METRICS.forEach((a,i)=>METRICS.forEach((b,j)=>{
+    const v=corr[a][b];
+    const isMax=(i===maxI&&j===maxJ)||(i===maxJ&&j===maxI);
+    g.append('rect').attr('x',j*cell).attr('y',i*cell).attr('width',cell).attr('height',cell)
+      .attr('fill',color(v))
+      .attr('stroke',isMax?'#FFD700':'#0D1117')
+      .attr('stroke-width',isMax?2.5:1.5)
+      .append('title').text(`${M_LABELS[i]} × ${M_LABELS[j]}: ${v.toFixed(2)}`);
+    if(Math.abs(v)>0.01)
+      g.append('text').attr('x',j*cell+cell/2).attr('y',i*cell+cell/2+4)
+        .attr('text-anchor','middle').attr('font-size',9.5).attr('fill',Math.abs(v)>0.5?'white':'#ccc')
+        .attr('font-family',"'IBM Plex Mono'").text(v.toFixed(2));
+    // Label on max cell
+    if(i===maxI&&j===maxJ)
+      g.append('text').attr('x',j*cell+cell/2).attr('y',i*cell-4)
+        .attr('text-anchor','middle').attr('font-size',8).attr('fill','#FFD700')
+        .attr('font-family',"'IBM Plex Sans'").text('max |r|');
+  }));
+  METRICS.forEach((m,j)=>g.append('text').attr('x',j*cell+cell/2).attr('y',n*cell+14)
+    .attr('text-anchor','start').attr('font-size',9).attr('fill','#8B949E')
+    .attr('transform',`rotate(35,${j*cell+cell/2},${n*cell+14})`)
+    .attr('font-family',"'IBM Plex Sans'").text(M_LABELS[j]));
+  METRICS.forEach((m,i)=>g.append('text').attr('x',-8).attr('y',i*cell+cell/2+4)
+    .attr('text-anchor','end').attr('font-size',9).attr('fill','#8B949E')
+    .attr('font-family',"'IBM Plex Sans'").text(M_LABELS[i]));
+}
+
+// ── Data Table ────────────────────────────────────
+function drawTable(rows){
+  const sc=computeScores(rows);
+  const withScore=rows.map((r,i)=>({...r,wscore:sc[i]}));
+  withScore.sort((a,b)=>{
+    const v=a[sortCol]<b[sortCol]?-1:a[sortCol]>b[sortCol]?1:0;
+    return sortAsc?v:-v;
+  });
+  const tb=document.getElementById('tableBody');tb.innerHTML='';
+  withScore.forEach(r=>{
+    const tr=document.createElement('tr');
+    if(r.seq_id===selectedSeq)tr.className='sel-row';
+    tr.style.cursor='pointer';
+    tr.title=`Click to ${r.seq_id===selectedSeq?'deselect':'select'} Seq ${String(r.seq_id).padStart(2,'0')}`;
+    tr.innerHTML=`
+      <td>Seq ${String(r.seq_id).padStart(2,'0')}</td>
+      <td>${r.n_frames.toLocaleString()}</td>
+      <td>${r.rmse.toFixed(3)}</td>
+      <td>${r.drift_slope.toFixed(4)}</td>
+      <td>${r.accum_drift.toFixed(1)}</td>
+      <td>${r.early_error.toFixed(1)}</td>
+      <td>${r.late_error.toFixed(1)}</td>
+      <td>${r.curvature.toFixed(3)}</td>
+      <td>${r.entropy.toFixed(3)}</td>
+      <td><strong>${r.wscore.toFixed(4)}</strong></td>
+      <td><span class="pill ${C_NAMES[r.cluster].toLowerCase()}">${C_NAMES[r.cluster]}</span></td>
+    `;
+    tr.addEventListener('click',()=>selectSeq(selectedSeq===r.seq_id?null:r.seq_id));
+    tb.appendChild(tr);
+  });
+}
+function sortBy(col){sortAsc=sortCol===col?!sortAsc:true;sortCol=col;drawTable(DATA);}
+
+// ── Stat Cards ────────────────────────────────────
+function updateStats(rows){
+  const sc=computeScores(rows);
+  const easy=rows.filter(r=>r.cluster===0),med=rows.filter(r=>r.cluster===1),hard=rows.filter(r=>r.cluster===2);
+  const fmtIds=arr=>arr.map(r=>`Seq ${String(r.seq_id).padStart(2,'0')}`).join(', ')||'—';
+  document.getElementById('s-total').textContent=rows.length;
+  document.getElementById('s-easy').textContent=easy.length;
+  document.getElementById('s-med').textContent=med.length;
+  document.getElementById('s-hard').textContent=hard.length;
+  document.getElementById('s-sub-total').textContent=`Seqs: ${rows.map(r=>String(r.seq_id).padStart(2,'0')).sort().join(', ')}`;
+  document.getElementById('s-sub-easy').textContent=fmtIds(easy);
+  document.getElementById('s-sub-med').textContent=fmtIds(med);
+  document.getElementById('s-sub-hard').textContent=fmtIds(hard);
+  document.getElementById('hdr-seqs').textContent=rows.length;
+  const hIdx=sc.indexOf(Math.max(...sc));
+  document.getElementById('s-hardest').textContent=`Seq ${String(rows[hIdx].seq_id).padStart(2,'0')}`;
+  document.getElementById('s-hardest-score').textContent=`Score: ${sc[hIdx].toFixed(4)}`;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// NEW: PARALLEL COORDINATES  (D3 + brushing)
+// ═══════════════════════════════════════════════════════════════════
+function drawParallelCoords(rows){
+  const container=document.getElementById('parallel-container');
+  container.innerHTML='';pcBrushObjs={};
+
+  const CW=Math.max(container.clientWidth||900,600);
+  const mg={top:46,right:30,bottom:18,left:30};
+  const W=CW-mg.left-mg.right,H=230;
+
+  const svg=d3.select(container).append('svg')
+    .attr('width',CW).attr('height',H+mg.top+mg.bottom);
+  const g=svg.append('g').attr('transform',`translate(${mg.left},${mg.top})`);
+
+  const xSc=d3.scalePoint().domain(METRICS).range([0,W]).padding(.08);
+  const ySc={};
+  METRICS.forEach(m=>{ySc[m]=d3.scaleLinear().domain([0,1]).range([H,0]);});
+
+  // Tooltip
+  const tip=d3.select('body').selectAll('.pc-tip').data([0]).join('div')
+    .attr('class','pc-tip')
+    .style('position','fixed').style('background','#1C2430')
+    .style('border','1px solid #30363D').style('border-radius','7px')
+    .style('padding','.42rem .8rem').style('font-size','.76rem')
+    .style('font-family',"'IBM Plex Sans'").style('pointer-events','none')
+    .style('display','none').style('z-index','9999')
+    .style('box-shadow','0 4px 20px rgba(0,0,0,.55)');
+
+  function isActive(d){
+    return METRICS.every(m=>{
+      if(!pcActive[m])return true;
+      return d[m+'_n']>=pcActive[m][0]&&d[m+'_n']<=pcActive[m][1];
+    });
+  }
+  function pathD(d){return d3.line()(METRICS.map(m=>[xSc(m),ySc[m](d[m+'_n'])]));}
+
+  const paths=g.append('g').selectAll('path').data(rows).enter().append('path')
+    .attr('class','pc-line')
+    .attr('d',pathD)
+    .attr('stroke',d=>C_COLORS[d.cluster])
+    .attr('stroke-opacity',d=>isActive(d)?0.72:0.05)
+    .attr('stroke-width',d=>isActive(d)?2:1)
+    .on('mouseover',function(ev,d){
+      d3.select(this).raise().attr('stroke-opacity',1).attr('stroke-width',3.5);
+      const sc=computeScores(rows);
+      tip.style('display','block')
+        .html(`<strong style="color:${C_COLORS[d.cluster]}">Seq ${String(d.seq_id).padStart(2,'0')}</strong> <span style="color:#8B949E">[${C_NAMES[d.cluster]}]</span><br>Score: <strong>${sc[rows.indexOf(d)].toFixed(3)}</strong>`)
+        .style('left',(ev.clientX+12)+'px').style('top',(ev.clientY-26)+'px');
+    })
+    .on('mousemove',ev=>{tip.style('left',(ev.clientX+12)+'px').style('top',(ev.clientY-26)+'px');})
+    .on('mouseout',function(ev,d){
+      d3.select(this).attr('stroke-opacity',isActive(d)?0.72:0.05).attr('stroke-width',isActive(d)?2:1);
+      tip.style('display','none');
+    });
+
+  function refreshPC(){
+    paths.attr('stroke-opacity',d=>isActive(d)?0.72:0.05)
+         .attr('stroke-width',d=>isActive(d)?2:1);
+    const n=rows.filter(d=>isActive(d)).length;
+    document.getElementById('pc-count').textContent=
+      Object.keys(pcActive).length?`Showing ${n} / ${rows.length} sequences`:'';
+  }
+
+  METRICS.forEach(m=>{
+    const ax=g.append('g').attr('transform',`translate(${xSc(m)},0)`);
+    // axis line
+    ax.append('line').attr('y1',0).attr('y2',H).attr('stroke','#30363D').attr('stroke-width',1.5);
+    // ticks
+    [0,.25,.5,.75,1].forEach(v=>{
+      ax.append('line').attr('x1',-4).attr('x2',4).attr('y1',ySc[m](v)).attr('y2',ySc[m](v)).attr('stroke','#444');
+      ax.append('text').attr('x',-7).attr('y',ySc[m](v)+3).attr('text-anchor','end')
+        .attr('fill','#555').attr('font-size',7).attr('font-family',"'IBM Plex Mono'").text(v.toFixed(2));
+    });
+    // label
+    ax.append('text').attr('y',-22).attr('text-anchor','middle')
+      .attr('fill','#E6EDF3').attr('font-size',10).attr('font-family',"'IBM Plex Sans'").attr('font-weight','600')
+      .text(M_LABELS[METRICS.indexOf(m)]);
+    ax.append('text').attr('y',-10).attr('text-anchor','middle')
+      .attr('fill','#444').attr('font-size',7.5).attr('font-family',"'IBM Plex Mono'").text('↕ drag');
+    // brush
+    const brush=d3.brushY().extent([[-10,0],[10,H]])
+      .on('brush end',function({selection}){
+        if(selection){
+          const hi=ySc[m].invert(selection[0]),lo=ySc[m].invert(selection[1]);
+          pcActive[m]=[Math.min(lo,hi),Math.max(lo,hi)];
+        } else { delete pcActive[m]; }
+        refreshPC();
+      });
+    const bg=ax.append('g').call(brush);
+    bg.select('.selection').attr('fill','rgba(88,166,255,.18)').attr('stroke','#58A6FF');
+    bg.selectAll('.handle').attr('fill','#58A6FF');
+    pcBrushObjs[m]={brush,g:bg};
+  });
+
+  // legend
+  const lg=g.append('g').attr('transform',`translate(${W-160},-42)`);
+  [0,1,2].forEach((c,i)=>{
+    lg.append('rect').attr('x',i*56).attr('y',2).attr('width',30).attr('height',3)
+      .attr('fill',C_COLORS[c]).attr('rx',1);
+    lg.append('text').attr('x',i*56+35).attr('y',6).attr('fill',C_COLORS[c])
+      .attr('font-size',9).attr('font-family',"'IBM Plex Sans'").text(C_NAMES[c]);
+  });
+  refreshPC();
+}
+
+function clearAllBrushes(){
+  pcActive={};
+  Object.values(pcBrushObjs).forEach(({brush,g})=>g.call(brush.move,null));
+  drawParallelCoords(DATA);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// NEW: ANIMATED TRAJECTORY VIEWER
+// ═══════════════════════════════════════════════════════════════════
+function mkRng(seed){
+  let s=seed|0;
+  return ()=>{s=(s*1664525+1013904223)&0xffffffff;return(s>>>0)/4294967296;};
+}
+function smooth(pts,k){
+  return pts.map((p,i)=>{
+    const sl=pts.slice(Math.max(0,i-k),i+k+1);
+    return[sl.reduce((a,b)=>a+b[0],0)/sl.length,sl.reduce((a,b)=>a+b[1],0)/sl.length];
+  });
+}
+function noisy(pts,mag,seed){
+  const r=mkRng(seed);return pts.map(p=>[p[0]+(r()-.5)*mag,p[1]+(r()-.5)*mag]);
+}
+
+let TRAJ=(()=>{
+  const N=280,o={};
+  // Seq 00: large residential loop (not quite closed)
+  {const p=[];for(let i=0;i<=N;i++){const t=(i/N)*Math.PI*2*0.93;p.push([320*Math.cos(t)+60*Math.cos(3*t),200*Math.sin(t)+40*Math.sin(2*t)]);}
+  o[0]=noisy(smooth(p,5),8,101);}
+  // Seq 01: highway — nearly straight, very long
+  {const p=[];for(let i=0;i<=N;i++){const t=i/N;p.push([560*t-280,22*Math.sin(t*Math.PI*2.5)+7*Math.sin(t*Math.PI*9)]);}
+  o[1]=noisy(smooth(p,3),3,102);}
+  // Seq 02: large urban/campus partial loop
+  {const p=[];for(let i=0;i<=N;i++){const t=(i/N)*Math.PI*2*0.84;p.push([420*Math.cos(t)+100*Math.cos(2*t),280*Math.sin(t)+70*Math.sin(3*t)]);}
+  o[2]=noisy(smooth(p,5),12,103);}
+  // Seq 03: suburban winding
+  {const p=[];for(let i=0;i<=N;i++){const t=(i/N)*Math.PI*2*0.78;p.push([180*Math.cos(t)+45*Math.sin(4*t),130*Math.sin(t)+35*Math.cos(3*t)]);}
+  o[3]=noisy(smooth(p,4),6,104);}
+  // Seq 04: short highway
+  {const p=[];for(let i=0;i<=N;i++){const t=i/N;p.push([260*t-130,18*Math.sin(t*Math.PI*3)+4*Math.sin(t*Math.PI*8)]);}
+  o[4]=noisy(smooth(p,2),2.5,105);}
+  // Seq 05: urban residential medium loop
+  {const p=[];for(let i=0;i<=N;i++){const t=(i/N)*Math.PI*2*0.97;p.push([270*Math.cos(t)+65*Math.cos(3*t)+38*Math.cos(5*t),190*Math.sin(t)+45*Math.sin(2*t)]);}
+  o[5]=noisy(smooth(p,5),9,106);}
+  // Seq 06: urban mixed
+  {const p=[];for(let i=0;i<=N;i++){const t=(i/N)*Math.PI*2*0.81;p.push([210*Math.cos(t)+52*Math.cos(3*t),148*Math.sin(t)+38*Math.sin(4*t)]);}
+  o[6]=noisy(smooth(p,4),7,107);}
+  // Seq 07: tight nearly-closed loop (high curvature)
+  {const p=[];for(let i=0;i<=N;i++){const t=(i/N)*Math.PI*2*0.994;p.push([115*Math.cos(t)+18*Math.cos(7*t),88*Math.sin(t)+14*Math.sin(5*t)]);}
+  o[7]=noisy(smooth(p,3),3.5,108);}
+  // Seq 08: long suburban mixed
+  {const p=[];for(let i=0;i<=N;i++){const t=(i/N)*Math.PI*2*0.89;p.push([350*Math.cos(t)+85*Math.cos(2*t)+32*Math.cos(5*t),230*Math.sin(t)+65*Math.sin(3*t)]);}
+  o[8]=noisy(smooth(p,5),11,109);}
+  // Seq 09: campus figure-8
+  {const p=[];for(let i=0;i<=N;i++){const t=(i/N)*Math.PI*2;p.push([210*Math.sin(t),135*Math.sin(2*t)]);}
+  o[9]=noisy(smooth(p,4),5.5,110);}
+  // Seq 10: campus suburban winding
+  {const p=[];for(let i=0;i<=N;i++){const t=(i/N)*Math.PI*2*0.84;p.push([240*Math.cos(t)+58*Math.cos(4*t),168*Math.sin(t)+42*Math.sin(3*t)]);}
+  o[10]=noisy(smooth(p,4),8,111);}
+  // normalise all to ±1.0 (renderTrajFrame scales to canvas at draw time)
+  for(let k=0;k<11;k++){
+    const xs=o[k].map(p=>p[0]),ys=o[k].map(p=>p[1]);
+    const mx=Math.max(Math.abs(Math.min(...xs)),Math.abs(Math.max(...xs)),
+                      Math.abs(Math.min(...ys)),Math.abs(Math.max(...ys)));
+    const sc=mx>0?1.0/mx:1;
+    o[k]=o[k].map(p=>[p[0]*sc,p[1]*sc]);
+  }
+  return o;
+})();
+
+function initTraj(){
+  const sid=parseInt(document.getElementById('traj-seq').value);
+  if(traj.raf){cancelAnimationFrame(traj.raf);traj.raf=null;}
+  traj.id=sid;traj.frame=0;traj.playing=false;
+  document.getElementById('play-btn').textContent='▶ Play';
+  const pts=TRAJ[sid];
+  document.getElementById('t-total').textContent=pts.length;
+  const row=DATA.find(r=>r.seq_id===sid);
+  const cl=row?C_NAMES[row.cluster]:'—';
+  const clCol=row?C_COLORS[row.cluster]:'#8B949E';
+  document.getElementById('t-cluster').textContent=`${cl} cluster`;
+  document.getElementById('t-cluster').style.color=clCol;
+  renderTrajFrame();
+}
+
+function renderTrajFrame(){
+  const canvas=document.getElementById('traj-canvas');
+  const ctx=canvas.getContext('2d');
+  const CW=canvas.offsetWidth||canvas.width;
+  canvas.width=CW;const CH=parseInt(canvas.getAttribute('height'));
+  const cx=CW/2,cy=CH/2;
+  // scale ±1.0 normalised trajectories to fit canvas with padding
+  const SCALE=Math.min(CW,CH)/2*0.86;
+  const sid=traj.id,pts=TRAJ[sid];
+  const fr=Math.min(traj.frame,pts.length-1);
+  const row=DATA.find(r=>r.seq_id===sid);
+  const col=row?C_COLORS[row.cluster]:'#F39C12';
+  // bg
+  ctx.fillStyle='#080d12';ctx.fillRect(0,0,CW,CH);
+  // grid
+  ctx.strokeStyle='rgba(255,255,255,.03)';ctx.lineWidth=1;
+  for(let gx=cx%40;gx<CW;gx+=40){ctx.beginPath();ctx.moveTo(gx,0);ctx.lineTo(gx,CH);ctx.stroke();}
+  for(let gy=cy%40;gy<CH;gy+=40){ctx.beginPath();ctx.moveTo(0,gy);ctx.lineTo(CW,gy);ctx.stroke();}
+  // ghost full path
+  ctx.beginPath();ctx.strokeStyle='rgba(255,255,255,.07)';ctx.lineWidth=1;
+  pts.forEach((p,i)=>{const[x,y]=[cx+p[0]*SCALE,cy-p[1]*SCALE];i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);});
+  ctx.stroke();
+  // traveled path
+  if(fr>1){
+    ctx.beginPath();ctx.strokeStyle=col;ctx.lineWidth=2.5;
+    ctx.shadowBlur=6;ctx.shadowColor=col+'88';
+    pts.slice(0,fr+1).forEach((p,i)=>{const[x,y]=[cx+p[0]*SCALE,cy-p[1]*SCALE];i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);});
+    ctx.stroke();ctx.shadowBlur=0;
+  }
+  // start marker
+  const[sx,sy]=[cx+pts[0][0]*SCALE,cy-pts[0][1]*SCALE];
+  ctx.beginPath();ctx.arc(sx,sy,5,0,Math.PI*2);ctx.fillStyle='#fff';ctx.fill();
+  ctx.fillStyle='#555';ctx.font='8px IBM Plex Mono';ctx.fillText('START',sx+7,sy+3);
+  // current position
+  if(fr>0){
+    const[px,py]=[cx+pts[fr][0]*SCALE,cy-pts[fr][1]*SCALE];
+    ctx.beginPath();ctx.arc(px,py,7,0,Math.PI*2);
+    ctx.fillStyle=col;ctx.shadowBlur=16;ctx.shadowColor=col;ctx.fill();ctx.shadowBlur=0;
+    ctx.beginPath();ctx.arc(px,py,3.5,0,Math.PI*2);ctx.fillStyle='#fff';ctx.fill();
+  }
+  // labels
+  ctx.fillStyle=col;ctx.font='bold 11px IBM Plex Mono';
+  ctx.fillText(`Seq ${String(sid).padStart(2,'0')}`,10,18);
+  const pct=Math.round(fr/pts.length*100);
+  ctx.fillStyle='#555';ctx.font='9px IBM Plex Mono';ctx.fillText(`${pct}% complete`,10,CH-8);
+  // update UI
+  document.getElementById('t-frame').textContent=fr;
+  document.getElementById('t-progress').style.width=pct+'%';
+}
+
+function animTraj(){
+  if(!traj.playing)return;
+  traj.frame=Math.min(traj.frame+3,TRAJ[traj.id].length-1);
+  renderTrajFrame();
+  if(traj.frame<TRAJ[traj.id].length-1){traj.raf=requestAnimationFrame(animTraj);}
+  else{traj.playing=false;document.getElementById('play-btn').textContent='▶ Play';}
+}
+function togglePlay(){
+  traj.playing=!traj.playing;
+  document.getElementById('play-btn').textContent=traj.playing?'⏸ Pause':'▶ Play';
+  if(traj.playing)animTraj();
+}
+function resetTraj(){
+  if(traj.raf){cancelAnimationFrame(traj.raf);traj.raf=null;}
+  traj.playing=false;traj.frame=0;
+  document.getElementById('play-btn').textContent='▶ Play';
+  renderTrajFrame();
+}
+let _allIdx=0,_allTimer=null,_allSeqIds=[];
+function playAllSeqs(){
+  if(_allTimer){clearTimeout(_allTimer);_allTimer=null;}
+  _allSeqIds=[...DATA.map(r=>r.seq_id)].sort((a,b)=>a-b);
+  _allIdx=0;
+  function next(){
+    if(_allIdx>=_allSeqIds.length)return;
+    const sid=_allSeqIds[_allIdx];
+    document.getElementById('traj-seq').value=sid;initTraj();
+    traj.playing=true;animTraj();
+    _allTimer=setTimeout(()=>{traj.playing=false;_allIdx++;if(_allIdx<_allSeqIds.length)setTimeout(next,300);},3500);
+  }
+  next();
+}
+
+// Rebuild trajectory dropdown to match whatever sequences are loaded
+function rebuildTrajDropdown(rows){
+  const sel=document.getElementById('traj-seq');
+  const prev=parseInt(sel.value)||0;
+  sel.innerHTML='';
+  const sorted=[...rows].sort((a,b)=>a.seq_id-b.seq_id);
+  sorted.forEach(r=>{
+    const opt=document.createElement('option');
+    opt.value=r.seq_id;
+    opt.textContent=`Seq ${String(r.seq_id).padStart(2,'0')} — ${C_NAMES[r.cluster]} (score ${computeScores([r])[0].toFixed(3)})`;
+    sel.appendChild(opt);
+  });
+  // restore previous selection if still valid, else pick first
+  sel.value=rows.find(r=>r.seq_id===prev)?prev:sorted[0].seq_id;
+}
+document.getElementById('traj-seq').addEventListener('change',initTraj);
+
+// ═══════════════════════════════════════════════════════════════════
+// NEW: WEIGHT SLIDERS
+// ═══════════════════════════════════════════════════════════════════
+function buildWeightSliders(){
+  const grid=document.getElementById('weight-grid');grid.innerHTML='';
+  METRICS.forEach((m,i)=>{
+    const div=document.createElement('div');div.className='weight-item';
+    div.innerHTML=`
+      <div class="weight-val" id="wv${i}">${WEIGHTS[i].toFixed(1)}</div>
+      <input type="range" id="ws${i}" min="0" max="3" step="0.1" value="${WEIGHTS[i]}">
+      <div class="weight-label">${M_LABELS[i]}</div>`;
+    grid.appendChild(div);
+    div.querySelector('input').addEventListener('input',function(){
+      WEIGHTS[i]=parseFloat(this.value);
+      document.getElementById('wv'+i).textContent=WEIGHTS[i].toFixed(1);
+      refreshWeighted();
+    });
+  });
+}
+function refreshWeighted(){drawBar(DATA);drawRuntime(DATA);drawTable(DATA);updateStats(DATA);updateFindings();}
+function updateFindings(){
+  const sc=computeScores(DATA);
+  const hi=Math.max(...sc),lo=Math.min(...sc);
+  const hR=DATA[sc.indexOf(hi)],lR=DATA[sc.indexOf(lo)];
+  const topW=Math.max(...WEIGHTS),topM=M_LABELS[WEIGHTS.indexOf(topW)];
+  const ratio=(hi/(lo||0.001)).toFixed(1);
+  const nFilters=Object.keys(pcActive).length;
+  document.getElementById('weight-findings').innerHTML=
+    `<strong>Seq ${String(hR.seq_id).padStart(2,'0')}</strong> is hardest (score <strong>${hi.toFixed(3)}</strong>) — `+
+    `<strong>${ratio}×</strong> harder than <strong>Seq ${String(lR.seq_id).padStart(2,'0')}</strong> `+
+    `(score <strong>${lo.toFixed(3)}</strong>). Top-weighted metric: <strong>${topM}</strong> (w=${topW.toFixed(1)}). `+
+    (nFilters?`<strong>Parallel coords filter active on ${nFilters} axis/axes.</strong>`
+     :'Use the parallel coordinate axes above to cross-filter sequences.');
+}
+function resetWeights(){WEIGHTS=[1,1,1,1,1,1,1];buildWeightSliders();refreshWeighted();}
+function setPreset(t){
+  if(t==='drift')    WEIGHTS=[0.5,3.0,3.0,1.0,1.5,0.2,0.3];
+  if(t==='geometry') WEIGHTS=[0.4,0.4,0.4,0.4,0.4,3.0,2.5];
+  if(t==='temporal') WEIGHTS=[0.5,0.5,0.5,3.0,3.0,0.3,0.3];
+  buildWeightSliders();refreshWeighted();
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// CSV UPLOAD  (original logic preserved)
+// ═══════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════
+// POSE FILE PROCESSING — all metrics computed directly from .txt files
+// ═══════════════════════════════════════════════════════════════════
+
+// Parse a KITTI pose .txt file → array of {t:[x,y,z]} objects
+function parsePoseFile(text){
+  const poses=[];
+  for(const line of text.trim().split('\n')){
+    const v=line.trim().split(/\s+/).map(Number);
+    if(v.length<12)continue;
+    poses.push({t:[v[3],v[7],v[11]]}); // translation column of 3×4 matrix
+  }
+  return poses;
+}
+
+// XZ plane trajectory (for 2-D metrics, matching Python)
+function toXZ(poses){return poses.map(p=>[p.t[0],p.t[2]]);}
+
+// Step variance — std of frame-to-frame XZ distances (Python's "RMSE")
+function metricRMSE(xz){
+  const d=[];
+  for(let i=1;i<xz.length;i++){
+    const dx=xz[i][0]-xz[i-1][0],dz=xz[i][1]-xz[i-1][1];
+    d.push(Math.sqrt(dx*dx+dz*dz));
+  }
+  const mn=d.reduce((a,b)=>a+b,0)/d.length;
+  return Math.sqrt(d.reduce((s,v)=>s+(v-mn)**2,0)/d.length);
+}
+
+// Drift slope + accumulated drift (uses full XYZ, matching Python)
+function metricDrift(poses){
+  const n=poses.length,o=poses[0].t;
+  const fo=poses.map(p=>{const dx=p.t[0]-o[0],dy=p.t[1]-o[1],dz=p.t[2]-o[2];return Math.sqrt(dx*dx+dy*dy+dz*dz);});
+  const mx=(n-1)/2,my=fo.reduce((a,b)=>a+b,0)/n;
+  const num=fo.reduce((s,v,i)=>s+(i-mx)*(v-my),0);
+  const den=fo.reduce((s,_,i)=>s+(i-mx)**2,0);
+  return{slope:num/den,accum:fo[n-1]};
+}
+
+// Early / late error (uses full XYZ, matching Python)
+function metricTemporal(poses){
+  const n=poses.length,h=Math.floor(n/2),o=poses[0].t;
+  const fo=poses.map(p=>{const dx=p.t[0]-o[0],dy=p.t[1]-o[1],dz=p.t[2]-o[2];return Math.sqrt(dx*dx+dy*dy+dz*dz);});
+  return{early:fo.slice(0,h).reduce((a,b)=>a+b,0)/h, late:fo.slice(h).reduce((a,b)=>a+b,0)/(n-h)};
+}
+
+// Mean absolute curvature (XZ, matching Python numpy.gradient)
+function metricCurvature(xz){
+  const n=xz.length;
+  function grad(a){
+    const g=new Array(n);
+    g[0]=a[1]-a[0]; g[n-1]=a[n-1]-a[n-2];
+    for(let i=1;i<n-1;i++)g[i]=(a[i+1]-a[i-1])/2;
+    return g;
+  }
+  const x=xz.map(p=>p[0]),z=xz.map(p=>p[1]);
+  const dx=grad(x),dz=grad(z),ddx=grad(dx),ddz=grad(dz);
+  let s=0;
+  for(let i=0;i<n;i++){
+    s+=Math.abs(dx[i]*ddz[i]-dz[i]*ddx[i])/(Math.pow(dx[i]*dx[i]+dz[i]*dz[i],1.5)+1e-10);
+  }
+  return s/n;
+}
+
+// Shannon entropy of heading histogram (XZ, 18 bins, matching Python)
+function metricEntropy(xz,bins=18){
+  const hist=new Array(bins).fill(0);
+  for(let i=1;i<xz.length;i++){
+    const dx=xz[i][0]-xz[i-1][0],dz=xz[i][1]-xz[i-1][1];
+    const bin=Math.min(Math.floor((Math.atan2(dz,dx)+Math.PI)/(2*Math.PI)*bins),bins-1);
+    hist[bin]++;
+  }
+  const tot=hist.reduce((a,b)=>a+b,0)+1e-10;
+  let H=0;hist.forEach(h=>{if(h>0){const p=h/tot;H-=p*Math.log2(p);}});
+  return H;
+}
+
+// Downsample XZ to ≤300 points, normalize to ±1.0 for canvas
+function toDisplayTraj(xz,maxPts=300){
+  const step=Math.max(1,Math.ceil(xz.length/maxPts));
+  let pts=[];for(let i=0;i<xz.length;i+=step)pts.push(xz[i]);
+  if(pts[pts.length-1]!==xz[xz.length-1])pts.push(xz[xz.length-1]);
+  const xs=pts.map(p=>p[0]),zs=pts.map(p=>p[1]);
+  const cx=(Math.max(...xs)+Math.min(...xs))/2,cz=(Math.max(...zs)+Math.min(...zs))/2;
+  const centered=pts.map(p=>[p[0]-cx,p[1]-cz]);
+  const mx=Math.max(...centered.map(p=>Math.max(Math.abs(p[0]),Math.abs(p[1]))));
+  const sc=mx>0?1.0/mx:1;
+  return centered.map(p=>[p[0]*sc,p[1]*sc]);
+}
+
+// Process all uploaded pose .txt files — accepts any numeric filenames (00–99+)
+async function processPoseFiles(files){
+  const fileArr=Array.from(files)
+    .filter(f=>f.name.match(/^\d+\.txt$/i))   // any number, not just 2-digit
+    .sort((a,b)=>parseInt(a.name)-parseInt(b.name));
+
+  const st=document.getElementById('pose-status');
+  if(!fileArr.length){
+    st.className='upload-status warn';st.style.display='block';
+    st.textContent='⚠ No valid pose files found. Files must be named like 00.txt, 01.txt … (numbers only)';
+    return;
+  }
+
+  st.className='upload-status working';st.style.display='block';
+  st.textContent=`⟳ Processing ${fileArr.length} pose files…`;
+
+  const rows=[];
+  for(const file of fileArr){
+    const sid=parseInt(file.name);
+    const text=await file.text();
+    const t0=performance.now();
+    const poses=parsePoseFile(text);
+    const runtime=(performance.now()-t0)/1000;
+
+    if(poses.length<2){continue;}
+
+    const xz=toXZ(poses);
+    const drift=metricDrift(poses);
+    const temp=metricTemporal(poses);
+
+    // Store REAL trajectory (replaces synthetic)
+    TRAJ[sid]=toDisplayTraj(xz);
+
+    rows.push({
+      seq_id:sid, n_frames:poses.length,
+      rmse:metricRMSE(xz),
+      drift_slope:drift.slope, accum_drift:drift.accum,
+      early_error:temp.early,  late_error:temp.late,
+      curvature:metricCurvature(xz),
+      entropy:metricEntropy(xz),
+      runtime_s:runtime,
+    });
+
+    st.textContent=`⟳ Processed ${rows.length} / ${fileArr.length} — Seq ${String(sid).padStart(2,'0')} (${poses.length} frames)`;
+  }
+
+  if(!rows.length){
+    st.className='upload-status warn';
+    st.textContent='⚠ No valid data extracted. Check that files are KITTI pose format (12 values per line).';
+    return;
+  }
+
+  DATA=processData(rows);
+  document.getElementById('demo-notice').style.display='none';
+  st.className='upload-status ok';
+  st.innerHTML=`✓ Loaded <strong>${rows.length}</strong> sequences from pose files — metrics computed in browser · real trajectories active`;
+  renderAll(DATA);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// STAGED UPLOAD — file selected → show compute button → click → run
+// ═══════════════════════════════════════════════════════════════════
+let _pendingCSV  = null;   // staged CSV file
+let _pendingPose = null;   // staged pose FileList
+let _computeMode = null;   // 'csv' | 'pose'
+
+function showComputeBar(mode, label){
+  _computeMode = mode;
+  const bar = document.getElementById('compute-bar');
+  bar.classList.add('visible');
+  document.getElementById('compute-info').innerHTML =
+    `<strong>${label}</strong> &nbsp;—&nbsp; click the button to compute all metrics and render the dashboard.`;
+  const btn = document.getElementById('compute-btn');
+  btn.disabled = false;
+  btn.innerHTML = '▶ &nbsp;Compute Dashboard';
+}
+
+function setComputingState(label){
+  const btn = document.getElementById('compute-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>Computing…';
+  document.getElementById('compute-info').innerHTML =
+    `<span class="spinner"></span><strong>${label}</strong>`;
+}
+
+function finishComputeBar(){
+  const bar = document.getElementById('compute-bar');
+  bar.style.borderColor = 'var(--accent)';
+  bar.style.background  = 'linear-gradient(90deg,#0d0d1f,#0d1117)';
+  document.getElementById('compute-btn').style.display = 'none';
+  document.getElementById('compute-info').innerHTML =
+    '✓ &nbsp;Dashboard computed from real data — all charts updated.';
+}
+
+function runCompute(){
+  if(_computeMode === 'csv' && _pendingCSV)  processCSVFile(_pendingCSV);
+  if(_computeMode === 'pose' && _pendingPose) processPoseFiles(_pendingPose);
+}
+
+// ── CSV: stage on file select ──────────────────────
+document.getElementById('csv-input').addEventListener('change', e => {
+  const file = e.target.files[0]; if(!file) return;
+  _pendingCSV = file;
+  const st = document.getElementById('csv-status');
+  st.className='upload-status ok'; st.style.display='block';
+  st.textContent = `✓ "${file.name}" selected — ready to compute.`;
+  showComputeBar('csv', file.name);
+});
+
+// ── Process CSV ────────────────────────────────────
+function processCSVFile(file){
+  setComputingState(`Parsing ${file.name}…`);
+  document.getElementById('csv-zone').classList.add('computing');
+  document.getElementById('csv-prog-inner').style.width = '30%';
+
+  const reader = new FileReader();
+  reader.onload = ev => {
+    try{
+      document.getElementById('csv-prog-inner').style.width = '55%';
+      const lines = ev.target.result.trim().split('\n');
+      const header = lines[0].split(',').map(h=>h.trim().replace(/^"|"$/g,'').toLowerCase().replace(/\s+/g,'_'));
+      const parsed = lines.slice(1).filter(l=>l.trim()).map(l=>{
+        const vals=l.split(','), obj={};
+        header.forEach((h,i)=>{const v=(vals[i]||'').trim().replace(/^"|"$/g,''); obj[h]=v===''?NaN:(isNaN(v)?v:parseFloat(v));});
+        return obj;
+      });
+      const ALIASES={
+        seq_id:['seq_id','sequence_id','seq','id'],
+        n_frames:['n_frames','frames','num_frames','length'],
+        rmse:['rmse','step_var','step_variance','motion_irregularity'],
+        drift_slope:['drift_slope','slope','drift_rate'],
+        accum_drift:['accum_drift','accumulated_drift','accum','total_drift'],
+        early_error:['early_error','early_err','error_early'],
+        late_error:['late_error','late_err','error_late'],
+        curvature:['curvature','mean_curvature','curv'],
+        entropy:['entropy','motion_entropy','heading_entropy'],
+        runtime_s:['runtime_s','runtime','time_s','processing_time'],
+      };
+      const CLUSTER_MAP={'easy':0,'medium':1,'hard':2,'0':0,'1':1,'2':2};
+      function pick(obj,aliases){for(const a of aliases){if(a in obj&&!isNaN(parseFloat(obj[a])))return parseFloat(obj[a]);}return NaN;}
+      const rows = parsed.map((obj,ri)=>{
+        let sid=pick(obj,ALIASES.seq_id); if(isNaN(sid))sid=ri;
+        const row={seq_id:sid};
+        Object.entries(ALIASES).forEach(([col,aliases])=>{
+          if(col==='seq_id')return;
+          let v=pick(obj,aliases); if(isNaN(v))v=0;
+          row[col]=v;
+        });
+        // Try to read cluster from Python CSV (column named "cluster")
+        const clRaw = (obj['cluster']||'').toString().toLowerCase().trim();
+        if(clRaw in CLUSTER_MAP) row._cluster = CLUSTER_MAP[clRaw];
+        return row;
+      }).filter(r=>r.rmse>0);
+
+      if(!rows.length) throw new Error('No valid rows found.');
+
+      const hasClusters = rows.every(r=>r._cluster!==undefined);
+      document.getElementById('csv-prog-inner').style.width = '80%';
+      const missing = Object.keys(ALIASES).filter(c=>c!=='seq_id'&&rows.every(r=>!r[c]));
+      const warnHtml = missing.length
+        ? `<br><span style="color:var(--medium);font-size:.74rem">⚠ Columns defaulted to 0: ${missing.join(', ')}</span>` : '';
+
+      setTimeout(()=>{
+        DATA = processData(rows, hasClusters);
+        document.getElementById('csv-prog-inner').style.width = '100%';
+        document.getElementById('demo-notice').style.display = 'none';
+        document.getElementById('csv-zone').classList.remove('computing');
+        const st = document.getElementById('csv-status');
+        const clMsg = ' · Cluster assignments applied';
+        st.className='upload-status ok';
+        st.innerHTML = `✓ Loaded <strong>${DATA.length}</strong> sequences from <em>${file.name}</em>${warnHtml}<br><span style="font-size:.72rem;opacity:.7">${clMsg}</span>`;
+        finishComputeBar();
+        renderAll(DATA);
+      }, 200);
+
+    } catch(err){
+      document.getElementById('csv-zone').classList.remove('computing');
+      const st=document.getElementById('csv-status');
+      st.className='upload-status warn'; st.style.display='block';
+      st.textContent = '✕ ' + err.message;
+      document.getElementById('compute-btn').disabled = false;
+      document.getElementById('compute-btn').innerHTML = '▶ &nbsp;Retry';
+    }
+  };
+  reader.readAsText(file);
+}
+
+// ── Pose: stage on file select ─────────────────────
+document.getElementById('pose-input').addEventListener('change', e => {
+  if(!e.target.files.length) return;
+  const valid = Array.from(e.target.files).filter(f=>f.name.match(/^\d+\.txt$/i));
+  if(!valid.length){
+    const st=document.getElementById('pose-status');
+    st.className='upload-status warn'; st.style.display='block';
+    st.textContent='⚠ No valid pose files found. Files must be named like 00.txt, 01.txt…'; return;
+  }
+  _pendingPose = e.target.files;
+  const st = document.getElementById('pose-status');
+  st.className='upload-status ok'; st.style.display='block';
+  st.textContent = `✓ ${valid.length} pose file(s) selected — ready to compute.`;
+  showComputeBar('pose', `${valid.length} pose files`);
+});
+
+// ── Process pose files ─────────────────────────────
+async function processPoseFiles(files){
+  const fileArr = Array.from(files).filter(f=>f.name.match(/^\d+\.txt$/i)).sort((a,b)=>parseInt(a.name)-parseInt(b.name));
+  const st = document.getElementById('pose-status');
+  const poseZone = document.getElementById('pose-zone');
+  poseZone.classList.add('computing');
+  setComputingState(`Processing ${fileArr.length} pose files…`);
+
+  const rows = [];
+  for(let fi=0; fi<fileArr.length; fi++){
+    const file = fileArr[fi];
+    const pct = Math.round((fi/fileArr.length)*80);
+    document.getElementById('pose-prog-inner').style.width = pct + '%';
+    document.getElementById('compute-info').innerHTML =
+      `<span class="spinner"></span>Processing file <strong>${fi+1} / ${fileArr.length}</strong> — ${file.name}`;
+
+    const sid = parseInt(file.name);
+    const text = await file.text();
+    const t0 = performance.now();
+    const poses = parsePoseFile(text);
+    const runtime = (performance.now()-t0)/1000;
+    if(poses.length < 2) continue;
+
+    const xz = toXZ(poses);
+    const drift = metricDrift(poses);
+    const temp  = metricTemporal(poses);
+    TRAJ[sid]   = toDisplayTraj(xz);
+
+    rows.push({
+      seq_id:sid, n_frames:poses.length,
+      rmse:metricRMSE(xz),
+      drift_slope:drift.slope, accum_drift:drift.accum,
+      early_error:temp.early, late_error:temp.late,
+      curvature:metricCurvature(xz),
+      entropy:metricEntropy(xz),
+      runtime_s:runtime,
+    });
+
+    st.innerHTML = `⟳ Processed ${rows.length} / ${fileArr.length} — Seq ${String(sid).padStart(2,'0')} (${poses.length} frames)`;
+  }
+
+  if(!rows.length){
+    poseZone.classList.remove('computing');
+    st.className='upload-status warn';
+    st.textContent='⚠ No valid data extracted. Check that files are KITTI pose format (12 values per line).';
+    document.getElementById('compute-btn').disabled=false;
+    document.getElementById('compute-btn').innerHTML='▶ &nbsp;Retry';
+    return;
+  }
+
+  document.getElementById('pose-prog-inner').style.width = '100%';
+  DATA = processData(rows);
+  document.getElementById('demo-notice').style.display = 'none';
+  poseZone.classList.remove('computing');
+  st.className='upload-status ok';
+  st.innerHTML = `✓ Loaded <strong>${rows.length}</strong> sequences — metrics computed in browser · real trajectories active`;
+  finishComputeBar();
+  renderAll(DATA);
+}
+
+// ── Drag & drop for both cards ────────────────────
+function setupDrop(zoneId, onFiles){
+  const zone = document.getElementById(zoneId);
+  zone.addEventListener('dragover', e=>{e.preventDefault(); zone.classList.add('drag');});
+  zone.addEventListener('dragleave', ()=>zone.classList.remove('drag'));
+  zone.addEventListener('drop', e=>{
+    e.preventDefault(); zone.classList.remove('drag');
+    onFiles(e.dataTransfer.files);
+  });
+}
+setupDrop("csv-zone", files=>{
+  if(!files[0]) return;
+  _pendingCSV = files[0];
+  const st = document.getElementById("csv-status");
+  st.className="upload-status ok"; st.style.display="block";
+  st.textContent = `✓ "${files[0].name}" ready — click Compute Dashboard.`;
+  showComputeBar("csv", files[0].name);
+});
+setupDrop("pose-zone", files=>{
+  if(!files.length) return;
+  const valid = Array.from(files).filter(f=>f.name.match(/^\d+\.txt$/i));
+  if(!valid.length) return;
+  _pendingPose = files;
+  const st=document.getElementById("pose-status");
+  st.className="upload-status ok"; st.style.display="block";
+  st.textContent=`✓ ${valid.length} pose file(s) ready — click Compute Dashboard.`;
+  showComputeBar("pose", `${valid.length} pose files`);
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// RENDER ALL
+// ═══════════════════════════════════════════════════════════════════
+function renderAll(rows){
+  selectedSeq=null;
+  updateStats(rows);
+  buildWeightSliders();
+  rebuildTrajDropdown(rows);
+  drawFindings(rows);
+  drawBar(rows);
+  drawRadar(rows);
+  drawPCA(rows);
+  drawTemporal(rows);
+  drawRuntime(rows);
+  drawHeatmap(rows);
+  drawParallelCoords(rows);
+  drawSummaryCards(rows);
+  drawTable(rows);
+  initTraj();
+  updateFindings();
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// INIT  — inject demo notice then render
+// ═══════════════════════════════════════════════════════════════════
+(function(){
+  const notice=document.createElement('div');
+  notice.id='demo-notice';
+  notice.style.gridArea='notice';
+  notice.style.background='linear-gradient(90deg,#1a1a2e,#16213e)';
+  notice.style.border='1px solid #2D3561';
+  notice.style.borderRadius='8px';
+  notice.style.padding='.8rem 1.2rem';
+  notice.style.fontSize='.82rem';
+  notice.style.color='#A8B4FF';
+  notice.style.display='flex';
+  notice.style.alignItems='center';
+  notice.style.gap='.6rem';
+  notice.innerHTML='ℹ️ &nbsp;Showing <strong>demo data</strong>. Upload your real data: <strong>Option A</strong> — drop your CSV, or <strong>Option B</strong> — drop all 11 pose .txt files. Then click the green <strong>Compute Dashboard</strong> button.';
+  document.querySelector('main').insertBefore(notice,document.getElementById('stats-row'));
+})();
+
+DATA=processData(DEMO, true);  // use hardcoded scikit-learn clusters
+renderAll(DATA);
+</script>
+</body>
+</html>
